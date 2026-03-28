@@ -74,6 +74,17 @@ backend/
 
 ---
 
+## 开发阶段总结：Phase 2 行情接入与持仓计算
+
+在 Phase 2 阶段，我们成功将静态的交易账本与实时的市场行情相连接，为应用赋予了生命力：
+
+1. **依赖扩展**：引入了开源的 `yfinance` 实现免密钥的实盘数据抓取，并通过 `cachetools` 实现了基于 5 分钟 TTL 的进程内缓存机制。
+2. **行情抓取服务 (`src/services/market_data.py`)**：能够基于符号（如 `AAPL`, `00700.HK`）透明地拉取实盘价格，并具备异常容错兜底能力。
+3. **持仓聚合引擎 (`src/services/positions.py`)**：通过 chronologically replay 方式遍历指定用户的交易流水，计算精准的当前持有股数（`total_quantity`）与加权单位成本（`average_cost`）。
+4. **持仓接口 (`GET /api/positions`)**：对外提供聚合端点，联合上述两个服务实时计算并返回未实现盈亏（`unrealized_pnl`）及盈亏比（`unrealized_pnl_percent`）。
+
+---
+
 ## 阶段部署与本地运行指南
 
 执行如下四步指令，即可于本地全功能起步并测试 Phase 1 的各项建设成果：
