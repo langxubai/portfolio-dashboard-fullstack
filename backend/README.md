@@ -37,9 +37,14 @@ backend/
     ├── database.py         # Supabase 客户端全局单例实例化逻辑
     ├── schemas/            # Pydantic 响应与请求模型定义 (DTO层)
     │   ├── accounts.py     # account 模型增删改查的数据抽象
-    │   └── assets.py       # asset 模型增删改查的初步数据抽象
+    │   ├── assets.py       # asset 模型的抽象
+    │   ├── transactions.py # 交易流水数据与 Enum 类型的抽象
+    │   └── alert_rules.py  # 报警规则的数据抽象
     └── routers/            # 路由层 (Endpoints Controller)
-        └── accounts.py     # 实现 /api/accounts 的 CRUD RESTful 逻辑
+        ├── accounts.py     # 实现 /api/accounts 的 CRUD RESTful 逻辑
+        ├── assets.py       # 实现 /api/assets 资产的 CRUD
+        ├── transactions.py # 实现 /api/transactions 以及带过滤的查询接口
+        └── alert_rules.py  # 实现 /api/alert_rules 的规则维护端点
 ```
 
 ### 4. 核心代码实现详情
@@ -48,7 +53,7 @@ backend/
    - 实例化了 `FastAPI` 应用，并配置了 OpenAPI 文档元数据。
    - 加入了 `CORSMiddleware` 跨域中间件并放行了所有（`*`）原站域名、头部和方法，用于轻松同时兼容后续开发的 Streamlit (Web) 页面与 Scriptable (iOS) 小组件。
    - 实现了一个用于容器和存活探针调用的基础断言探测接口 `/health`。
-   - 使用 `app.include_router()` 将子路由控制器 `accounts.router` 挂载进入当前主应用树中。
+   - 使用 `app.include_router()` 将子路由控制器 (`accounts`, `assets`, `transactions`, `alert_rules`) 挂载进入当前主应用树中。
 
 2. **数据库连接单例 `src/database.py`**
    - 通过 `dotenv` 读取 `.env` 下属的环境配置。
@@ -59,13 +64,13 @@ backend/
    - 实现数据结构定义与数据流分离操作：在 `accounts.py` 内部创建了 `AccountBase` (共享字段基类), `AccountCreate` (写入传输层), `AccountUpdate` (动态更新), `AccountResponse` (外部响应包裹等)。
    - 并在响应基类利用 `model_config = ConfigDict(from_attributes=True)` 特性，使得通过 ORM 或 Supabase response 返回的 JSON / Dict 对象能无缝由 FastAPI 自动序列化返回给终端 HTTP 调用者。
 
-4. **RESTful 路由控制器 `src/routers/accounts.py`**
-   - 定义了一个标准的带有独立标签（Tags："Accounts"）和路径前缀（`prefix="/api/accounts"`）的 `APIRouter` 路由组。
+4. **RESTful 路由控制器 `src/routers/`**
+   - 定义了四个标准的带有独立标签和路径前缀的 `APIRouter` 路由组（`Accounts`, `Assets`, `Transactions`, `Alert Rules`）。
    - 深度集成业务逻辑，包含：
-     - **POST** `/api/accounts/`：接收合法的请求体，插入新记录并处理异常信息。
-     - **GET** `/api/accounts/`：列表接口功能，查询并返回当前 Supabase `accounts` 表中的全量集合。
-     - **GET** `/api/accounts/{account_id}`：执行针对精确业务主键主键 UUID 的特定条件检索。
-     - **DELETE** `/api/accounts/{account_id}`：实现具备安全防卫性质的业务销毁机制。
+     - **POST**：接收合法的请求体，插入新记录，强校验枚举（`TradeType`, `RuleType`等）与数据精度（`Decimal`）。
+     - **GET**：列表接口功能，并针对 `transactions` 提供基于 `account_id` 与 `asset_id` 的过滤；针对单条记录利用 UUID 检索。
+     - **PUT / PATCH**：对 `alert_rules` 等部分接口提供局部的状态更新能力支持。
+     - **DELETE**：结合外键的 `ON DELETE CASCADE` 实现具备安全防卫性质的业务销毁机制。
 
 ---
 

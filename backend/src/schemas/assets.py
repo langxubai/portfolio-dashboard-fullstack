@@ -1,5 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
+from typing import Optional
 
 class AssetBase(BaseModel):
     symbol: str
@@ -8,6 +9,11 @@ class AssetBase(BaseModel):
 
 class AssetCreate(AssetBase):
     pass
+
+class AssetUpdate(BaseModel):
+    symbol: Optional[str] = None
+    name: Optional[str] = None
+    asset_type: Optional[str] = None
 
 class AssetResponse(AssetBase):
     id: str
