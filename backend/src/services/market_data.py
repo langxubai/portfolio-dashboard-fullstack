@@ -40,3 +40,40 @@ def get_current_prices(symbols: List[str]) -> Dict[str, float]:
         if price is not None:
             prices[symbol] = price
     return prices
+
+import pandas as pd
+from datetime import timedelta
+
+@cached(cache=price_cache) # you can use a separate cache or the same if keys are different, but wait, args are different so keys will be different
+def fetch_historical_price_for_window(symbol: str, window_minutes: int) -> Optional[float]:
+    """
+    Fetches the price from approximately `window_minutes` ago.
+    Useful for CHANGE_PERCENT and CHANGE_ABS alert rules.
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        # Get at least (window/1440 + 5) days to ensure we cover weekends/holidays
+        days_to_fetch = max(5, int(window_minutes / 1440) + 5)
+        # Use 1m for small windows (up to 7 days), else 5m/1h depending on window size
+        # yfinance allows 1m max for 7d
+        if days_to_fetch <= 7:
+            period = f"{days_to_fetch}d"
+            interval = "1m"
+        else:
+            period = "1mo"
+            interval = "1h"
+            
+        df = ticker.history(period=period, interval=interval)
+        if df.empty:
+            return None
+        
+        last_dt = df.index[-1]
+        target_dt = last_dt - timedelta(minutes=window_minutes)
+        
+        # Find closest date index
+        closest_idx = df.index.get_indexer([target_dt], method="nearest")[0]
+        closest_price = float(df['Close'].iloc[closest_idx])
+        return closest_price
+    except Exception as e:
+        logger.error(f"Failed to fetch historical price for window {window_minutes} of {symbol}: {e}")
+        return None

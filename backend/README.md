@@ -85,6 +85,20 @@ backend/
 
 ---
 
+## 开发阶段总结：Phase 3 规则引擎与报警推送
+
+在 Phase 3 阶段，我们基于 `APScheduler` 构建了自动化报警轮询机制，并集成了设备端的实时消息推送（Bark）：
+
+1. **推送服务集成 (`src/services/notifications.py`)**：通过 `httpx` 实现了向下游 iOS 端配置好的自定义 `BARK_URL` 发送包含触发资产、类型和内容详情的 GET 推送请求能力。
+2. **规则评估核心 (`src/services/alert_engine.py`)**：开发主校验逻辑：
+   - 筛选出处于激活态 (`is_active=True`) 且逃脱冷却周期 (`cooldown_minutes`) 的规则进行状态机评估。
+   - **历史切片价格获取**: 针对 `CHANGE_PERCENT` / `CHANGE_ABS` 的瞬时涨跌限制，扩展 `yfinance` 历史窗口拉取服务 (`src/services/market_data.py::fetch_historical_price_for_window`)，做到对过去 N 分钟（如 60 分钟）的历史开盘价的精确回溯。
+   - 支持多方向（UP / DOWN）阈值区间刺穿、计算波动比率并分发报警。
+   - 在触发有效动作后，持久化更新至主库 Supabase 中规则的 `last_triggered_at`。一次性目标价警报 (`TARGET_PRICE`) 命中将被置为失活状态以阻止重发。
+3. **调度中心组装 (`src/scheduler.py` & `src/main.py`)**：实例化了 `AsyncIOScheduler`，将以上计算挂载为周期定时的后台协程。利用 FastAPI 的 `@asynccontextmanager` 生命周期钩子将引擎与 API Server 深度融合，实现统一的启动与优雅停机。
+
+---
+
 ## 阶段部署与本地运行指南
 
 执行如下四步指令，即可于本地全功能起步并测试 Phase 1 的各项建设成果：
