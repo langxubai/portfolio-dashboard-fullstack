@@ -41,19 +41,21 @@ else:
             price = st.number_input("Unit Price", min_value=0.0, format="%f", step=0.1)
         with col3:
             quantity = st.number_input("Quantity", min_value=0.0, format="%f", step=1.0)
-            trade_time = st.date_input("Trade Date", value=datetime.today())
+            trade_date = st.date_input("Trade Date", value=datetime.today())
+            trade_time_input = st.time_input("Trade Time")
             
         submitted = st.form_submit_button("Log Transaction")
         if submitted:
             if price > 0 and quantity > 0:
+                # Combine date and time
+                trade_datetime = datetime.combine(trade_date, trade_time_input)
                 payload = {
                     "account_id": account_map[sel_account],
                     "asset_id": asset_map[sel_asset],
                     "trade_type": trade_type,
                     "price": price,
                     "quantity": quantity,
-                    # backend expects a timestamp/datetime, we combine date with min time
-                    "trade_time": f"{trade_time.isoformat()}T00:00:00Z"
+                    "trade_time": f"{trade_datetime.isoformat()}Z"
                 }
                 try:
                     api.create_transaction(payload)
@@ -83,10 +85,26 @@ try:
         df_tx["account_name"] = df_tx["account_id"].apply(lambda x: account_lookup.get(x, x))
         df_tx["asset_symbol"] = df_tx["asset_id"].apply(lambda x: asset_lookup.get(x, x))
         
-        display_df = df_tx[["trade_time", "account_name", "asset_symbol", "trade_type", "price", "quantity"]].copy()
+        display_df = df_tx[["id", "trade_time", "account_name", "asset_symbol", "trade_type", "price", "quantity"]].copy()
         display_df.sort_values(by="trade_time", ascending=False, inplace=True)
         st.dataframe(display_df, use_container_width=True, hide_index=True)
     else:
         st.info("No transaction history.")
 except Exception as e:
     st.error(f"Error loading transactions: {e}")
+
+st.markdown("---")
+st.subheader("Delete Transaction")
+with st.form("delete_tx_form"):
+    del_tx_id = st.text_input("Transaction UUID to delete")
+    del_submitted = st.form_submit_button("Delete Transaction")
+    if del_submitted:
+        if del_tx_id:
+            try:
+                api.delete_transaction(del_tx_id)
+                st.success("Transaction deleted successfully!")
+                refresh_data()
+            except Exception as e:
+                st.error(f"Failed to delete transaction: {e}")
+        else:
+            st.warning("Please enter a UUID.")

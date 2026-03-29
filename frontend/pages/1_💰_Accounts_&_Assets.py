@@ -43,6 +43,21 @@ with col1:
             else:
                 st.warning("Please fill out all fields.")
 
+    st.subheader("Delete Account")
+    with st.form("delete_account_form"):
+        del_acc_id = st.text_input("Account UUID to delete")
+        del_submitted = st.form_submit_button("Delete Account")
+        if del_submitted:
+            if del_acc_id:
+                try:
+                    api.delete_account(del_acc_id)
+                    st.success("Account deleted successfully!")
+                    refresh_data()
+                except Exception as e:
+                    st.error(f"Failed to delete account: {e}")
+            else:
+                st.warning("Please enter a UUID.")
+
 with col2:
     st.header("Assets")
     try:
@@ -77,3 +92,18 @@ with col2:
                     st.error(f"Failed to create: {e}")
             else:
                 st.warning("Please fill out all fields.")
+
+    st.subheader("Delete Asset")
+    with st.form("delete_asset_form"):
+        del_asset_id = st.text_input("Asset UUID to delete")
+        del_submitted = st.form_submit_button("Delete Asset")
+        if del_submitted:
+            if del_asset_id:
+                try:
+                    api.delete_asset(del_asset_id)
+                    st.success("Asset deleted successfully!")
+                    refresh_data()
+                except Exception as e:
+                    st.error(f"Failed to delete asset: {e}")
+            else:
+                st.warning("Please enter a UUID.")

@@ -78,4 +78,19 @@ class FinanceAPIClient:
             resp = client.delete(f"{self.base_url}/api/alert_rules/{rule_id}")
             resp.raise_for_status()
 
+    def delete_account(self, account_id: str) -> None:
+        with httpx.Client() as client:
+            resp = client.delete(f"{self.base_url}/api/accounts/{account_id}")
+            resp.raise_for_status()
+
+    def delete_asset(self, asset_id: str) -> None:
+        with httpx.Client() as client:
+            resp = client.delete(f"{self.base_url}/api/assets/{asset_id}")
+            resp.raise_for_status()
+
+    def delete_transaction(self, tx_id: str) -> None:
+        with httpx.Client() as client:
+            resp = client.delete(f"{self.base_url}/api/transactions/{tx_id}")
+            resp.raise_for_status()
+
 api = FinanceAPIClient()
