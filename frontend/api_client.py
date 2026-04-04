@@ -40,6 +40,16 @@ class FinanceAPIClient:
             resp = client.post(f"{self.base_url}/api/assets/", json=data)
             return self._handle_response(resp)
 
+    def create_custom_asset_price(self, asset_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        with httpx.Client() as client:
+            resp = client.post(f"{self.base_url}/api/assets/{asset_id}/prices", json=data)
+            return self._handle_response(resp)
+
+    def get_custom_asset_prices(self, asset_id: str) -> List[Dict[str, Any]]:
+        with httpx.Client() as client:
+            resp = client.get(f"{self.base_url}/api/assets/{asset_id}/prices")
+            return self._handle_response(resp)
+
     def get_transactions(self, account_id: Optional[str] = None, asset_id: Optional[str] = None) -> List[Dict[str, Any]]:
         params = {}
         if account_id: params["account_id"] = account_id

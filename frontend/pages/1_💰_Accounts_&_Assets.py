@@ -75,7 +75,7 @@ with col2:
         asset_symbol = st.text_input("Symbol", placeholder="e.g. AAPL, 00700.HK, BTC-USD")
         asset_name = st.text_input("Name", placeholder="e.g. Apple Inc., Tencent")
         # Can be flexible string, using dropdown for common ones
-        asset_type = st.selectbox("Asset Type", ["Stock", "Crypto", "Fund", "ETF"])
+        asset_type = st.selectbox("Asset Type", ["Stock", "Crypto", "Fund", "ETF", "Custom"])
         
         submitted = st.form_submit_button("Create Asset")
         if submitted:
@@ -107,3 +107,28 @@ with col2:
                     st.error(f"Failed to delete asset: {e}")
             else:
                 st.warning("Please enter a UUID.")
+
+    st.subheader("Update Custom Asset Price")
+    custom_assets = [a for a in assets if a.get("asset_type") == "Custom"] if "assets" in locals() and assets else []
+    
+    if custom_assets:
+        with st.form("custom_price_form"):
+            asset_options = {a["id"]: f"{a['name']} ({a['symbol']})" for a in custom_assets}
+            selected_asset_id = st.selectbox("Select Custom Asset", options=list(asset_options.keys()), format_func=lambda x: asset_options[x])
+            
+            new_price = st.number_input("New Price", min_value=0.0, format="%.4f")
+            
+            import datetime
+            record_date = st.date_input("Record Date", value=datetime.date.today())
+            
+            price_submitted = st.form_submit_button("Update Price")
+            if price_submitted:
+                try:
+                    dt = datetime.datetime.combine(record_date, datetime.datetime.now().time())
+                    api.create_custom_asset_price(selected_asset_id, {"price": float(new_price), "recorded_at": dt.isoformat()})
+                    st.success("Price updated successfully!")
+                    refresh_data()
+                except Exception as e:
+                    st.error(f"Failed to update price: {e}")
+    else:
+        st.info("No 'Custom' assets found to update.")
