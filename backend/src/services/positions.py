@@ -79,8 +79,36 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
             active_positions.append(pos)
             
     # Fetch market data
-    symbols = list(set(p["symbol"] for p in active_positions if "symbol" in p))
-    current_prices = get_current_prices(symbols)
+    normal_symbols = []
+    custom_asset_ids = []
+    
+    for p in active_positions:
+        if "symbol" in p:
+            if p.get("asset_type") == "Custom":
+                custom_asset_ids.append(p["asset_id"])
+            else:
+                normal_symbols.append(p["symbol"])
+                
+    normal_symbols = list(set(normal_symbols))
+    custom_asset_ids = list(set(custom_asset_ids))
+    
+    current_prices = get_current_prices(normal_symbols) if normal_symbols else {}
+    
+    # Fetch custom prices from DB
+    if custom_asset_ids:
+        query = supabase.table("custom_asset_prices").select("asset_id, price").in_("asset_id", custom_asset_ids).order("recorded_at", desc=True)
+        data, count = query.execute()
+        if data and data[1]:
+            seen_assets = set()
+            for row in data[1]:
+                a_id = row["asset_id"]
+                if a_id not in seen_assets:
+                    # Find symbol for this asset_id to map into current_prices
+                    for p in active_positions:
+                        if p["asset_id"] == a_id:
+                            current_prices[p["symbol"]] = float(row["price"])
+                            break
+                    seen_assets.add(a_id)
     
     # Finalize response
     results = []

@@ -51,3 +51,14 @@ CREATE INDEX IF NOT EXISTS idx_transactions_trade_time ON transactions(trade_tim
 
 CREATE INDEX IF NOT EXISTS idx_alert_rules_asset_id ON alert_rules(asset_id);
 CREATE INDEX IF NOT EXISTS idx_alert_rules_is_active ON alert_rules(is_active) WHERE is_active = TRUE;
+
+-- 5. 自定义资产历史价格表 (custom_asset_prices)
+CREATE TABLE IF NOT EXISTS custom_asset_prices (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    asset_id UUID REFERENCES assets(id) ON DELETE CASCADE,
+    price DECIMAL(18, 4) NOT NULL,
+    recorded_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_custom_asset_prices_asset_id ON custom_asset_prices(asset_id);
+CREATE INDEX IF NOT EXISTS idx_custom_asset_prices_recorded_at ON custom_asset_prices(recorded_at DESC);

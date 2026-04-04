@@ -20,3 +20,16 @@ class AssetResponse(AssetBase):
     created_at: datetime
     
     model_config = ConfigDict(from_attributes=True)
+
+class CustomAssetPriceCreate(BaseModel):
+    price: float
+    recorded_at: Optional[datetime] = None
+
+class CustomAssetPriceResponse(BaseModel):
+    id: str
+    asset_id: str
+    price: float
+    recorded_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
+
