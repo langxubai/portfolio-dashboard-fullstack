@@ -1,6 +1,19 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime
+import zoneinfo
 from api_client import api
+
+COMMON_TIMEZONES = [
+    "Asia/Shanghai",
+    "Asia/Hong_Kong",
+    "America/New_York",
+    "America/Chicago",
+    "America/Los_Angeles",
+    "Europe/London",
+    "Europe/Paris",
+    "UTC"
+]
 
 st.set_page_config(page_title="Accounts & Assets", page_icon="💰", layout="wide")
 
@@ -118,14 +131,17 @@ with col2:
             
             new_price = st.number_input("New Price", min_value=0.0, format="%.4f")
             
-            import datetime
-            record_date = st.date_input("Record Date", value=datetime.date.today())
+            record_date = st.date_input("Record Date", value=datetime.today().date())
+            record_time = st.time_input("Record Time", value=datetime.now().time())
+            record_tz = st.selectbox("Timezone", COMMON_TIMEZONES, index=0)
             
             price_submitted = st.form_submit_button("Update Price")
             if price_submitted:
                 try:
-                    dt = datetime.datetime.combine(record_date, datetime.datetime.now().time())
-                    api.create_custom_asset_price(selected_asset_id, {"price": float(new_price), "recorded_at": dt.isoformat()})
+                    dt = datetime.combine(record_date, record_time)
+                    tz = zoneinfo.ZoneInfo(record_tz)
+                    dt_aware = dt.replace(tzinfo=tz)
+                    api.create_custom_asset_price(selected_asset_id, {"price": float(new_price), "recorded_at": dt_aware.isoformat()})
                     st.success("Price updated successfully!")
                     refresh_data()
                 except Exception as e:

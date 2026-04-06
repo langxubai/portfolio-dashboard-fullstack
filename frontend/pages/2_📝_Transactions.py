@@ -1,7 +1,19 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import zoneinfo
 from api_client import api
+
+COMMON_TIMEZONES = [
+    "Asia/Shanghai",
+    "Asia/Hong_Kong",
+    "America/New_York",
+    "America/Chicago",
+    "America/Los_Angeles",
+    "Europe/London",
+    "Europe/Paris",
+    "UTC"
+]
 
 st.set_page_config(page_title="Transactions", page_icon="📝", layout="wide")
 
@@ -43,19 +55,23 @@ else:
             quantity = st.number_input("Quantity", min_value=0.0, format="%f", step=1.0)
             trade_date = st.date_input("Trade Date", value=datetime.today())
             trade_time_input = st.time_input("Trade Time")
+            trade_tz = st.selectbox("Timezone", COMMON_TIMEZONES, index=0)
             
         submitted = st.form_submit_button("Log Transaction")
         if submitted:
             if price > 0 and quantity > 0:
-                # Combine date and time
+                # Combine date and time, and add timezone
                 trade_datetime = datetime.combine(trade_date, trade_time_input)
+                tz = zoneinfo.ZoneInfo(trade_tz)
+                trade_datetime_aware = trade_datetime.replace(tzinfo=tz)
+                
                 payload = {
                     "account_id": account_map[sel_account],
                     "asset_id": asset_map[sel_asset],
                     "trade_type": trade_type,
                     "price": price,
                     "quantity": quantity,
-                    "trade_time": f"{trade_datetime.isoformat()}Z"
+                    "trade_time": trade_datetime_aware.isoformat()
                 }
                 try:
                     api.create_transaction(payload)

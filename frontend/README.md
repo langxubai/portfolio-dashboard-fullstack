@@ -22,9 +22,10 @@
 - **`pages/1_💰_Accounts_&_Assets.py` (账户与资产管理)**
   - 展示现有的投资账户列表（支持多币种如 USD/CNY）和关联的标底资产基底（如 Stock, Fund, Crypto 等）。
   - 内置基于 `st.form` 构建的表单，用于直观地为数据库增添新的 Account 和 Asset 记录。
+  - 支持对于 `Custom`（自定义类型）资产的手工历史价格更新，通过引入 `zoneinfo` 进行准确的交易时区选择，确保时间偏移传递至后端被无损落库。
 
 - **`pages/2_📝_Transactions.py` (录入交易数据)**
-  - **Trade Form**: 关联账户和资产的下拉框（自动抓取数据库已有内容）。记录单价 (Price)、数量 (Quantity)、交易方向 (BUY/SELL/DIVIDEND) 与发生时间。
+  - **Trade Form**: 关联账户和资产的下拉框（自动抓取数据库已有内容）。记录单价 (Price)、数量 (Quantity)、交易方向 (BUY/SELL/DIVIDEND) 、发生时间以及 **操作时区 (Timezone)** 的选择，彻底解决了由于前端原先粗糙的零时区转换导致的数据库落表混乱情况。
   - 此页同时作为**流水展示板**，按照时间倒序把用户的任何挂单入库行为拉取反馈出日志级详情记录。
 
 - **`pages/3_🔔_Alert_Rules.py` (报警规则配置与管理)**
