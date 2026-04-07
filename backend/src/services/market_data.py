@@ -53,6 +53,39 @@ def get_current_prices(symbols: List[str]) -> Dict[str, Dict[str, float]]:
             prices[symbol] = price_data
     return prices
 
+@cached(cache=price_cache)
+def fetch_exchange_rate(target: str, base: str) -> float:
+    """Fetch exchange rate from target currency to base currency (1 target = X base)."""
+    if target.upper() == base.upper():
+        return 1.0
+    
+    # yfinance uses symbols like USDCNY=X for USD to CNY
+    symbol = f"{target.upper()}{base.upper()}=X"
+    try:
+        ticker = yf.Ticker(symbol)
+        if hasattr(ticker, "fast_info") and 'last_price' in ticker.fast_info:
+            return float(ticker.fast_info['last_price'])
+        
+        # Fallback
+        df = ticker.history(period="1d")
+        if not df.empty:
+            return float(df['Close'].iloc[-1])
+    except Exception as e:
+        logger.error(f"Failed to fetch exchange rate for {target} to {base}: {e}")
+    
+    return 1.0  # Safe fallback if fetching fails
+
+def get_exchange_rates(base: str, targets: List[str]) -> Dict[str, float]:
+    """
+    Fetches exchange rates from a list of target currencies to a base currency.
+    """
+    rates = {}
+    for target in set(targets):
+        if not target:
+            continue
+        rates[target] = fetch_exchange_rate(target, base)
+    return rates
+
 import pandas as pd
 from datetime import timedelta
 

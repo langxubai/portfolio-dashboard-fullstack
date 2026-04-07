@@ -6,6 +6,7 @@ class AssetBase(BaseModel):
     symbol: str
     name: str
     asset_type: str
+    currency: str
 
 class AssetCreate(AssetBase):
     pass
@@ -14,6 +15,7 @@ class AssetUpdate(BaseModel):
     symbol: Optional[str] = None
     name: Optional[str] = None
     asset_type: Optional[str] = None
+    currency: Optional[str] = None
 
 class AssetResponse(AssetBase):
     id: str

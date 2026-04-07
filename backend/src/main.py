@@ -33,10 +33,11 @@ def read_root():
 def health_check():
     return {"status": "ok"}
 
-from src.routers import accounts, assets, transactions, alert_rules, positions, portfolio
+from src.routers import accounts, assets, transactions, alert_rules, positions, portfolio, market
 app.include_router(accounts.router)
 app.include_router(assets.router)
 app.include_router(transactions.router)
 app.include_router(alert_rules.router)
 app.include_router(positions.router)
 app.include_router(portfolio.router)
+app.include_router(market.router)

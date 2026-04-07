@@ -8,6 +8,7 @@ class PositionResponse(BaseModel):
     symbol: str
     name: str
     asset_type: str
+    currency: str
     
     total_quantity: Decimal
     average_cost: Decimal

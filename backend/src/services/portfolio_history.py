@@ -1,6 +1,6 @@
 from typing import List, Dict
 from src.database import supabase
-from src.services.market_data import download_historical_prices
+from src.services.market_data import download_historical_prices, get_exchange_rates
 from src.schemas.portfolio import PortfolioDailyHistory, PortfolioHistoryResponse
 import pandas as pd
 from datetime import datetime
@@ -8,7 +8,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def calculate_portfolio_history(period: str = "1y", account_id: str = None) -> PortfolioHistoryResponse:
+def calculate_portfolio_history(period: str = "1y", account_id: str = None, base_currency: str = "CNY") -> PortfolioHistoryResponse:
     if supabase is None:
         raise Exception("Supabase client not initialized.")
         
@@ -25,16 +25,24 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None) -> P
     if not transactions:
         return PortfolioHistoryResponse(history=[], period=period)
         
-    # Get all involved symbols
+    # Get all involved symbols and currencies
     market_symbols = set()
     custom_assets = set()
+    asset_currencies = {}
+    
     for tx in transactions:
         asset = tx.get("assets")
         if asset:
+            sym = asset.get("symbol")
+            cur = asset.get("currency", "CNY")
             if asset.get("asset_type") == "Custom":
                 custom_assets.add(asset.get("id"))
+                if sym: asset_currencies[sym] = cur
             else:
-                market_symbols.add(asset.get("symbol"))
+                market_symbols.add(sym)
+                asset_currencies[sym] = cur
+                
+    exchange_rates = get_exchange_rates(base_currency, list(asset_currencies.values()))
                 
     # Download prices
     prices_df = download_historical_prices(list(market_symbols), period=period)
@@ -100,12 +108,15 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None) -> P
                     qty = float(tx.get("quantity", 0))
                     price = float(tx.get("price", 0))
                     ttype = tx.get("trade_type")
+                    
+                    rate = exchange_rates.get(asset_currencies.get(sym, "CNY"), 1.0)
+                    
                     if ttype == "BUY":
                         current_holdings[sym] = current_holdings.get(sym, 0.0) + qty
-                        current_invested += qty * price
+                        current_invested += qty * price * rate
                     elif ttype == "SELL":
                         current_holdings[sym] = max(0.0, current_holdings.get(sym, 0.0) - qty)
-                        current_invested -= qty * price # naive net deposit calculation
+                        current_invested -= qty * price * rate # naive net deposit calculation
                 tx_index += 1
             else:
                 break
@@ -119,8 +130,9 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None) -> P
 
             if qty > 0 and sym in prices_df.columns:
                 p = prices_df.at[date, sym]
+                rate = exchange_rates.get(asset_currencies.get(sym, "CNY"), 1.0)
                 if not pd.isna(p):
-                    daily_value += qty * float(p)
+                    daily_value += qty * float(p) * rate
                     
         return_rate = (daily_value - current_invested) / current_invested if current_invested > 0 else 0.0
         

@@ -41,6 +41,7 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
                 "symbol": asset.get("symbol"),
                 "name": asset.get("name"),
                 "asset_type": asset.get("asset_type"),
+                "currency": asset.get("currency", "CNY"),
                 "total_quantity": Decimal("0"),
                 "total_cost": Decimal("0"),
                 "realized_pnl": Decimal("0"),
@@ -138,6 +139,7 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
             "symbol": symbol,
             "name": pos["name"],
             "asset_type": pos["asset_type"],
+            "currency": pos["currency"],
             "total_quantity": round(pos["total_quantity"], 8).normalize(),
             "average_cost": round(pos["average_cost"], 8).normalize(),
             "realized_pnl": round(pos["realized_pnl"], 4)
