@@ -13,8 +13,8 @@ class TransactionBase(BaseModel):
     account_id: str
     asset_id: str
     trade_type: TradeType
-    price: Decimal = Field(..., max_digits=18, decimal_places=4)
-    quantity: Decimal = Field(..., max_digits=18, decimal_places=4)
+    price: Decimal = Field(..., max_digits=24, decimal_places=8)
+    quantity: Decimal = Field(..., max_digits=24, decimal_places=8)
     trade_time: datetime
 
 class TransactionCreate(TransactionBase):
@@ -24,8 +24,8 @@ class TransactionUpdate(BaseModel):
     account_id: Optional[str] = None
     asset_id: Optional[str] = None
     trade_type: Optional[TradeType] = None
-    price: Optional[Decimal] = Field(None, max_digits=18, decimal_places=4)
-    quantity: Optional[Decimal] = Field(None, max_digits=18, decimal_places=4)
+    price: Optional[Decimal] = Field(None, max_digits=24, decimal_places=8)
+    quantity: Optional[Decimal] = Field(None, max_digits=24, decimal_places=8)
     trade_time: Optional[datetime] = None
 
 class TransactionResponse(TransactionBase):

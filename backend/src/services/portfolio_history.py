@@ -113,6 +113,10 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None) -> P
         # Calculate end of day value
         daily_value = 0.0
         for sym, qty in current_holdings.items():
+            if qty < 1e-8:
+                qty = 0.0
+                current_holdings[sym] = 0.0
+
             if qty > 0 and sym in prices_df.columns:
                 p = prices_df.at[date, sym]
                 if not pd.isna(p):

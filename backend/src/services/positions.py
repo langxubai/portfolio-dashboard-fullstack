@@ -79,8 +79,12 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
     # Filter out empty positions AND positions with 0 realized PnL
     active_positions = []
     for pos in positions_dict.values():
-        if pos["total_quantity"] > Decimal("1e-8") or abs(pos["realized_pnl"]) > Decimal("1e-8"):
-            avg_cost = pos["total_cost"] / pos["total_quantity"] if pos["total_quantity"] > Decimal("1e-8") else Decimal("0")
+        if pos["total_quantity"] < Decimal("1e-8"):
+            pos["total_quantity"] = Decimal("0")
+            pos["total_cost"] = Decimal("0")
+            
+        if pos["total_quantity"] > Decimal("0") or abs(pos["realized_pnl"]) > Decimal("1e-8"):
+            avg_cost = pos["total_cost"] / pos["total_quantity"] if pos["total_quantity"] > Decimal("0") else Decimal("0")
             pos["average_cost"] = avg_cost
             active_positions.append(pos)
             
@@ -134,8 +138,8 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
             "symbol": symbol,
             "name": pos["name"],
             "asset_type": pos["asset_type"],
-            "total_quantity": round(pos["total_quantity"], 4),
-            "average_cost": round(pos["average_cost"], 4),
+            "total_quantity": round(pos["total_quantity"], 8).normalize(),
+            "average_cost": round(pos["average_cost"], 8).normalize(),
             "realized_pnl": round(pos["realized_pnl"], 4)
         }
         

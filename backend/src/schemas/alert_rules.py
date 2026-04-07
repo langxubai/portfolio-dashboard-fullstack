@@ -17,7 +17,7 @@ class AlertRuleBase(BaseModel):
     asset_id: str
     rule_type: RuleType
     direction: Direction
-    target_value: Decimal = Field(..., max_digits=18, decimal_places=4)
+    target_value: Decimal = Field(..., max_digits=24, decimal_places=8)
     time_window_minutes: Optional[int] = None
     is_active: bool = True
     cooldown_minutes: int = 1440
@@ -29,7 +29,7 @@ class AlertRuleUpdate(BaseModel):
     asset_id: Optional[str] = None
     rule_type: Optional[RuleType] = None
     direction: Optional[Direction] = None
-    target_value: Optional[Decimal] = Field(None, max_digits=18, decimal_places=4)
+    target_value: Optional[Decimal] = Field(None, max_digits=24, decimal_places=8)
     time_window_minutes: Optional[int] = None
     is_active: Optional[bool] = None
     cooldown_minutes: Optional[int] = None
