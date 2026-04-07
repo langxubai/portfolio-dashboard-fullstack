@@ -26,6 +26,51 @@ if "update_trigger" not in st.session_state:
 def refresh_data():
     st.session_state.update_trigger += 1
 
+@st.dialog("Confirm Account Deletion")
+def confirm_delete_account(account_id):
+    st.warning(f"Are you sure you want to delete account {account_id}?")
+    try:
+        positions = api.get_positions()
+        acc_positions = [p for p in positions if p.get("account_id") == account_id and p.get("total_quantity", 0) > 0]
+        asset_count = len(acc_positions)
+        st.write(f"This account currently has **{asset_count}** active assets.")
+    except Exception as e:
+        st.error(f"Could not load position stats: {e}")
+        
+    if st.button("Confirm Delete", type="primary", key="confirm_del_acc"):
+        try:
+            api.delete_account(account_id)
+            st.success("Account deleted successfully!")
+            refresh_data()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Failed to delete account: {e}")
+
+@st.dialog("Confirm Asset Deletion")
+def confirm_delete_asset(asset_id):
+    st.warning(f"Are you sure you want to delete asset {asset_id}?")
+    try:
+        positions = api.get_positions()
+        asset_positions = [p for p in positions if p.get("asset_id") == asset_id]
+        total_quantity = sum(p.get("total_quantity", 0) for p in asset_positions)
+        
+        rules = api.get_alert_rules()
+        asset_rules = [r for r in rules if r.get("asset_id") == asset_id]
+        rule_count = len(asset_rules)
+        
+        st.write(f"This asset currently has a total holding of **{total_quantity}** and **{rule_count}** alert rule(s).")
+    except Exception as e:
+        st.error(f"Could not load stats: {e}")
+        
+    if st.button("Confirm Delete", type="primary", key="confirm_del_ast"):
+        try:
+            api.delete_asset(asset_id)
+            st.success("Asset deleted successfully!")
+            refresh_data()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Failed to delete asset: {e}")
+
 col1, col2 = st.columns(2)
 
 with col1:
@@ -62,12 +107,7 @@ with col1:
         del_submitted = st.form_submit_button("Delete Account")
         if del_submitted:
             if del_acc_id:
-                try:
-                    api.delete_account(del_acc_id)
-                    st.success("Account deleted successfully!")
-                    refresh_data()
-                except Exception as e:
-                    st.error(f"Failed to delete account: {e}")
+                confirm_delete_account(del_acc_id)
             else:
                 st.warning("Please enter a UUID.")
 
@@ -112,12 +152,7 @@ with col2:
         del_submitted = st.form_submit_button("Delete Asset")
         if del_submitted:
             if del_asset_id:
-                try:
-                    api.delete_asset(del_asset_id)
-                    st.success("Asset deleted successfully!")
-                    refresh_data()
-                except Exception as e:
-                    st.error(f"Failed to delete asset: {e}")
+                confirm_delete_asset(del_asset_id)
             else:
                 st.warning("Please enter a UUID.")
 

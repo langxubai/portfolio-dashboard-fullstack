@@ -26,6 +26,34 @@ if "tx_trigger" not in st.session_state:
 def refresh_data():
     st.session_state.tx_trigger += 1
 
+@st.dialog("Confirm Transaction Deletion")
+def confirm_delete_transaction(tx_id):
+    st.warning(f"Are you sure you want to delete this transaction?")
+    try:
+        tx_list = api.get_transactions()
+        tx_info = next((tx for tx in tx_list if tx.get("id") == tx_id), None)
+        if tx_info:
+            tx_qty = tx_info.get("quantity", 0)
+            tx_price = tx_info.get("price", 0)
+            tx_total = float(tx_qty) * float(tx_price)
+            st.write("This transaction details:")
+            st.write(f"- **Quantity**: {tx_qty}")
+            st.write(f"- **Unit Price**: {tx_price}")
+            st.write(f"- **Total Amount**: {tx_total:.4f}")
+        else:
+            st.write("Could not find transaction details.")
+    except Exception as e:
+        st.error(f"Could not load stats: {e}")
+        
+    if st.button("Confirm Delete", type="primary", key="confirm_del_tx"):
+        try:
+            api.delete_transaction(tx_id)
+            st.success("Transaction deleted successfully!")
+            refresh_data()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Failed to delete transaction: {e}")
+
 # Fetch references
 try:
     accounts = api.get_accounts()
@@ -48,39 +76,64 @@ else:
         with col1:
             sel_account = st.selectbox("Account", list(account_map.keys()))
             sel_asset = st.selectbox("Asset", list(asset_map.keys()))
+            trade_tz = st.selectbox("Timezone", COMMON_TIMEZONES, index=0)
         with col2:
             trade_type = st.selectbox("Trade Type", ["BUY", "SELL", "DIVIDEND"])
-            price = st.number_input("Unit Price", min_value=0.0, format="%f", step=0.1)
-        with col3:
-            quantity = st.number_input("Quantity", min_value=0.0, format="%f", step=1.0)
             trade_date = st.date_input("Trade Date", value=datetime.today())
             trade_time_input = st.time_input("Trade Time")
-            trade_tz = st.selectbox("Timezone", COMMON_TIMEZONES, index=0)
+        with col3:
+            st.info("💡 Fill exactly 2 of 3")
+            price = st.number_input("Unit Price", min_value=0.0, format="%f", step=0.1, value=0.0)
+            quantity = st.number_input("Quantity", min_value=0.0, format="%f", step=1.0, value=0.0)
+            total_amount = st.number_input("Total Amount", min_value=0.0, format="%f", step=1.0, value=0.0)
             
         submitted = st.form_submit_button("Log Transaction")
         if submitted:
-            if price > 0 and quantity > 0:
-                # Combine date and time, and add timezone
-                trade_datetime = datetime.combine(trade_date, trade_time_input)
-                tz = zoneinfo.ZoneInfo(trade_tz)
-                trade_datetime_aware = trade_datetime.replace(tzinfo=tz)
-                
-                payload = {
-                    "account_id": account_map[sel_account],
-                    "asset_id": asset_map[sel_asset],
-                    "trade_type": trade_type,
-                    "price": price,
-                    "quantity": quantity,
-                    "trade_time": trade_datetime_aware.isoformat()
-                }
-                try:
-                    api.create_transaction(payload)
-                    st.success("Transaction logged successfully!")
-                    refresh_data()
-                except Exception as e:
-                    st.error(f"Error saving transaction: {e}")
+            calc_price = float(price)
+            calc_qty = float(quantity)
+            calc_total = float(total_amount)
+            
+            non_zeros = sum([1 for v in [calc_price, calc_qty, calc_total] if v > 0])
+            valid = False
+            
+            if non_zeros == 3:
+                st.warning("You filled all three fields. We will strictly use Unit Price and Quantity.")
+                valid = True
+            elif non_zeros == 2:
+                if calc_price > 0 and calc_qty > 0:
+                    pass # Nothing to calculate
+                elif calc_total > 0 and calc_qty > 0:
+                    calc_price = calc_total / calc_qty
+                elif calc_total > 0 and calc_price > 0:
+                    calc_qty = calc_total / calc_price
+                valid = True
             else:
-                st.warning("Price and Quantity must be strictly > 0")
+                st.warning("Please fill strictly TWO fields among: Unit Price, Quantity, and Total Amount (leave the 3rd as 0.0).")
+
+            if valid:
+                if calc_price > 0 and calc_qty > 0:
+                    # Combine date and time, and add timezone
+                    trade_datetime = datetime.combine(trade_date, trade_time_input)
+                    tz = zoneinfo.ZoneInfo(trade_tz)
+                    trade_datetime_aware = trade_datetime.replace(tzinfo=tz)
+                    
+                    payload = {
+                        "account_id": account_map[sel_account],
+                        "asset_id": asset_map[sel_asset],
+                        "trade_type": trade_type,
+                        "price": calc_price,
+                        "quantity": calc_qty,
+                        "trade_time": trade_datetime_aware.isoformat()
+                    }
+                    try:
+                        api.create_transaction(payload)
+                        st.success(f"Transaction logged successfully! (Price: {calc_price:.4f}, Qty: {calc_qty:.4f})")
+                        refresh_data()
+                        st.rerun() # Refresh properly so the recent transaction shows up
+                    except Exception as e:
+                        st.error(f"Error saving transaction: {e}")
+                else:
+                    st.warning("Calculated Price and Quantity must be strictly > 0")
 
 st.markdown("---")
 st.subheader("Transaction History")
@@ -116,11 +169,6 @@ with st.form("delete_tx_form"):
     del_submitted = st.form_submit_button("Delete Transaction")
     if del_submitted:
         if del_tx_id:
-            try:
-                api.delete_transaction(del_tx_id)
-                st.success("Transaction deleted successfully!")
-                refresh_data()
-            except Exception as e:
-                st.error(f"Failed to delete transaction: {e}")
+            confirm_delete_transaction(del_tx_id)
         else:
             st.warning("Please enter a UUID.")

@@ -98,6 +98,13 @@ class FinanceAPIClient:
             resp = client.delete(f"{self.base_url}/api/assets/{asset_id}")
             resp.raise_for_status()
 
+    def get_portfolio_history(self, period: str = "1y", account_id: Optional[str] = None) -> Dict[str, Any]:
+        params = {"period": period}
+        if account_id: params["account_id"] = account_id
+        with httpx.Client() as client:
+            resp = client.get(f"{self.base_url}/api/portfolio/history", params=params)
+            return self._handle_response(resp)
+
     def delete_transaction(self, tx_id: str) -> None:
         with httpx.Client() as client:
             resp = client.delete(f"{self.base_url}/api/transactions/{tx_id}")
