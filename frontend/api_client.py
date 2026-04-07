@@ -98,8 +98,8 @@ class FinanceAPIClient:
             resp = client.delete(f"{self.base_url}/api/assets/{asset_id}")
             resp.raise_for_status()
 
-    def get_portfolio_history(self, period: str = "1y", account_id: Optional[str] = None) -> Dict[str, Any]:
-        params = {"period": period}
+    def get_portfolio_history(self, period: str = "1y", account_id: Optional[str] = None, base_currency: str = "CNY") -> Dict[str, Any]:
+        params = {"period": period, "base_currency": base_currency}
         if account_id: params["account_id"] = account_id
         with httpx.Client() as client:
             resp = client.get(f"{self.base_url}/api/portfolio/history", params=params)
@@ -109,5 +109,15 @@ class FinanceAPIClient:
         with httpx.Client() as client:
             resp = client.delete(f"{self.base_url}/api/transactions/{tx_id}")
             resp.raise_for_status()
+
+    def get_exchange_rates(self, base: str, targets: List[str]) -> Dict[str, float]:
+        if not targets:
+            return {}
+        with httpx.Client() as client:
+            resp = client.get(
+                f"{self.base_url}/api/market/exchange-rates",
+                params={"base": base, "targets": targets}
+            )
+            return self._handle_response(resp)
 
 api = FinanceAPIClient()

@@ -117,7 +117,9 @@ with col2:
         assets = api.get_assets()
         if assets:
             df_assets = pd.DataFrame(assets)
-            st.dataframe(df_assets[["id", "symbol", "name", "asset_type"]], use_container_width=True, hide_index=True)
+            if "currency" not in df_assets.columns:
+                df_assets["currency"] = "CNY" # fallback
+            st.dataframe(df_assets[["id", "symbol", "name", "asset_type", "currency"]], use_container_width=True, hide_index=True)
         else:
             st.info("No assets found.")
     except Exception as e:
@@ -127,8 +129,8 @@ with col2:
     with st.form("add_asset_form"):
         asset_symbol = st.text_input("Symbol", placeholder="e.g. AAPL, 00700.HK, BTC-USD")
         asset_name = st.text_input("Name", placeholder="e.g. Apple Inc., Tencent")
-        # Can be flexible string, using dropdown for common ones
-        asset_type = st.selectbox("Asset Type", ["Stock", "Crypto", "Fund", "ETF", "Custom"])
+        asset_type = st.selectbox("Asset Type", ["Stock", "Crypto", "Fund", "ETF", "Forex", "Custom"])
+        asset_currency = st.selectbox("Currency", ["CNY", "USD", "HKD", "EUR", "JPY", "GBP", "SGD"], index=0)
         
         submitted = st.form_submit_button("Create Asset")
         if submitted:
@@ -137,7 +139,8 @@ with col2:
                     api.create_asset({
                         "symbol": asset_symbol.upper(),
                         "name": asset_name,
-                        "asset_type": asset_type
+                        "asset_type": asset_type,
+                        "currency": asset_currency
                     })
                     st.success("Asset created successfully!")
                     refresh_data()
