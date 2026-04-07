@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS assets (
     symbol VARCHAR(50) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
     asset_type VARCHAR(50) NOT NULL, -- Stock, Fund, Crypto, etc.
+    currency VARCHAR(10) NOT NULL DEFAULT 'CNY',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
