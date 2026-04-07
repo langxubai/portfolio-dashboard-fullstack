@@ -13,7 +13,14 @@ class PositionResponse(BaseModel):
     average_cost: Decimal
     
     current_price: Optional[Decimal] = None
+    previous_close: Optional[Decimal] = None
     current_value: Optional[Decimal] = None
     
     unrealized_pnl: Optional[Decimal] = None
     unrealized_pnl_percent: Optional[Decimal] = None
+    
+    realized_pnl: Optional[Decimal] = None
+    realized_pnl_percent: Optional[Decimal] = None
+    
+    daily_pnl: Optional[Decimal] = None
+    daily_pnl_percent: Optional[Decimal] = None

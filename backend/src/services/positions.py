@@ -43,6 +43,8 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
                 "asset_type": asset.get("asset_type"),
                 "total_quantity": Decimal("0"),
                 "total_cost": Decimal("0"),
+                "realized_pnl": Decimal("0"),
+                "realized_cost": Decimal("0"),
             }
             
         pos = positions_dict[key]
@@ -64,17 +66,21 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
                 pos["total_quantity"] -= qty
                 pos["total_cost"] -= qty * avg_cost
                 
+                # Calculate realized PnL for this sale: Sale Proceeds - Cost of Sold Goods
+                pos["realized_pnl"] += qty * price - qty * avg_cost
+                pos["realized_cost"] += qty * avg_cost
+                
                 # Zero out if it dips to zero or below due to floating point inaccuracies/data errors
                 if pos["total_quantity"] <= Decimal("1e-8"):
                     pos["total_quantity"] = Decimal("0")
                     pos["total_cost"] = Decimal("0")
         # DIVIDEND does not affect the unit cost basis in this model
         
-    # Filter out empty positions
+    # Filter out empty positions AND positions with 0 realized PnL
     active_positions = []
     for pos in positions_dict.values():
-        if pos["total_quantity"] > Decimal("1e-8"):
-            avg_cost = pos["total_cost"] / pos["total_quantity"]
+        if pos["total_quantity"] > Decimal("1e-8") or abs(pos["realized_pnl"]) > Decimal("1e-8"):
+            avg_cost = pos["total_cost"] / pos["total_quantity"] if pos["total_quantity"] > Decimal("1e-8") else Decimal("0")
             pos["average_cost"] = avg_cost
             active_positions.append(pos)
             
@@ -114,7 +120,13 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
     results = []
     for pos in active_positions:
         symbol = pos["symbol"]
-        price = current_prices.get(symbol)
+        price_data = current_prices.get(symbol, {})
+        if isinstance(price_data, float): # fallback just in case
+            price = price_data
+            prev_close = None
+        else:
+            price = price_data.get("current_price")
+            prev_close = price_data.get("previous_close")
         
         pr_data = {
             "account_id": pos["account_id"],
@@ -123,9 +135,15 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
             "name": pos["name"],
             "asset_type": pos["asset_type"],
             "total_quantity": round(pos["total_quantity"], 4),
-            "average_cost": round(pos["average_cost"], 4)
+            "average_cost": round(pos["average_cost"], 4),
+            "realized_pnl": round(pos["realized_pnl"], 4)
         }
         
+        if pos["realized_cost"] > Decimal("0"):
+            pr_data["realized_pnl_percent"] = round(pos["realized_pnl"] / pos["realized_cost"], 4)
+        else:
+            pr_data["realized_pnl_percent"] = Decimal("0")
+            
         if price is not None:
             price_dec = Decimal(str(price))
             pr_data["current_price"] = max(round(price_dec, 4), Decimal("0"))
@@ -138,6 +156,14 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
                 pr_data["unrealized_pnl_percent"] = round(pnl_pct, 4)
             else:
                 pr_data["unrealized_pnl_percent"] = Decimal("0")
+                
+            if prev_close is not None:
+                prev_close_dec = Decimal(str(prev_close))
+                pr_data["previous_close"] = max(round(prev_close_dec, 4), Decimal("0"))
+                daily_pnl = (price_dec - prev_close_dec) * pos["total_quantity"]
+                pr_data["daily_pnl"] = round(daily_pnl, 4)
+                if prev_close_dec > Decimal("0"):
+                    pr_data["daily_pnl_percent"] = round((price_dec - prev_close_dec) / prev_close_dec, 4)
                 
         results.append(PositionResponse(**pr_data))
         
