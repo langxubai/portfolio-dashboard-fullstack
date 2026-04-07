@@ -80,7 +80,7 @@ else:
         with col2:
             trade_type = st.selectbox("Trade Type", ["BUY", "SELL", "DIVIDEND"])
             trade_date = st.date_input("Trade Date", value=datetime.today())
-            trade_time_input = st.time_input("Trade Time")
+            trade_time_str = st.text_input("Trade Time (HH:MM / HH:MM:SS)", value=datetime.now().strftime("%H:%M:%S"))
         with col3:
             st.info("💡 Fill exactly 2 of 3")
             price = st.number_input("Unit Price", min_value=0.0, format="%f", step=0.1, value=0.0)
@@ -112,8 +112,21 @@ else:
 
             if valid:
                 if calc_price > 0 and calc_qty > 0:
+                    # Parse time string
+                    parsed_time = None
+                    for fmt in ("%H:%M:%S", "%H:%M"):
+                        try:
+                            parsed_time = datetime.strptime(trade_time_str.strip(), fmt).time()
+                            break
+                        except ValueError:
+                            pass
+                    
+                    if parsed_time is None:
+                        st.error("Invalid Trade Time format. Please use HH:MM or HH:MM:SS.")
+                        st.stop()
+                        
                     # Combine date and time, and add timezone
-                    trade_datetime = datetime.combine(trade_date, trade_time_input)
+                    trade_datetime = datetime.combine(trade_date, parsed_time)
                     tz = zoneinfo.ZoneInfo(trade_tz)
                     trade_datetime_aware = trade_datetime.replace(tzinfo=tz)
                     

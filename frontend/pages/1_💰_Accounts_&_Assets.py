@@ -167,13 +167,25 @@ with col2:
             new_price = st.number_input("New Price", min_value=0.0, format="%.4f")
             
             record_date = st.date_input("Record Date", value=datetime.today().date())
-            record_time = st.time_input("Record Time", value=datetime.now().time())
+            record_time_str = st.text_input("Record Time (HH:MM / HH:MM:SS)", value=datetime.now().strftime("%H:%M:%S"))
             record_tz = st.selectbox("Timezone", COMMON_TIMEZONES, index=0)
             
             price_submitted = st.form_submit_button("Update Price")
             if price_submitted:
                 try:
-                    dt = datetime.combine(record_date, record_time)
+                    parsed_time = None
+                    for fmt in ("%H:%M:%S", "%H:%M"):
+                        try:
+                            parsed_time = datetime.strptime(record_time_str.strip(), fmt).time()
+                            break
+                        except ValueError:
+                            pass
+                    
+                    if parsed_time is None:
+                        st.error("Invalid time format. Please use HH:MM or HH:MM:SS.")
+                        st.stop()
+                        
+                    dt = datetime.combine(record_date, parsed_time)
                     tz = zoneinfo.ZoneInfo(record_tz)
                     dt_aware = dt.replace(tzinfo=tz)
                     api.create_custom_asset_price(selected_asset_id, {"price": float(new_price), "recorded_at": dt_aware.isoformat()})
