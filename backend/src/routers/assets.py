@@ -13,8 +13,16 @@ router = APIRouter(
 def create_asset(asset: AssetCreate):
     if supabase is None:
         raise HTTPException(status_code=500, detail="Supabase client not initialized.")
-        
-    data, count = supabase.table("assets").insert(asset.model_dump()).execute()
+    try:
+        data, count = supabase.table("assets").insert(asset.model_dump()).execute()
+    except Exception as e:
+        err_str = str(e)
+        if "23505" in err_str or "duplicate key" in err_str.lower():
+            raise HTTPException(
+                status_code=400,
+                detail=f"资产代码 '{asset.symbol}' 已存在。如需在多个账户持有同一资产，请先到数据库移除 assets 表 symbol 字段的唯一约束（UNIQUE constraint），详见说明。"
+            )
+        raise HTTPException(status_code=500, detail=f"Failed to create asset: {err_str}")
     if not data or not data[1]:
         raise HTTPException(status_code=400, detail="Failed to create asset")
     return data[1][0]

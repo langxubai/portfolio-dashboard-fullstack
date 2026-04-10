@@ -136,3 +136,43 @@ backend/
 ### 5. 公网集群化环境生产级部署
 - 将整个原先位于本机的 API 环境迁往外部云服务节点。
 - 实现与甲骨文云虚机捆绑组合、通过 `cloudflare tunnel` 内网穿透策略进行域名安全回源代理映射。从而让后续小组件或是面板彻底告别繁琐易断的内网调试局限于 Tailscale 层访问方式。
+
+---
+
+## 开发阶段总结：Phase 6 - 中国场外基金（FundCN）接入
+
+本阶段引入了对 A 股场外公募基金净值的全自动拉取能力，通过 **AkShare** 数据源实现无密钥、免费的基金行情接入，并以新资产类型 `FundCN` 完整融入现有的持仓计算与历史曲线逻辑。
+
+### 1. 新增依赖 (`pyproject.toml`)
+
+- 通过 `uv add akshare` 将 `akshare`（版本 `1.18.54`）加入后端依赖。AkShare 是一个开源的中国金融数据接口库，对接东方财富等主流数据源，无需 API Key。
+- 为保证在 AkShare 未安装时服务仍可正常启动（如部署环境差异），`market_data.py` 中采用 `try/except ImportError` 做优雅降级，以 `_AKSHARE_AVAILABLE` 标志位控制。
+
+### 2. 行情抓取扩展 (`services/market_data.py`)
+
+新增两个函数，均复用现有的 `TTLCache`（5分钟缓存）：
+
+- **`fetch_fund_cn_price(symbol: str) -> Optional[Dict[str, float]]`**
+  - 调用 `ak.fund_open_fund_info_em(symbol=symbol, indicator="单位净值走势")`，返回含「净值日期、单位净值、日增长率」三列的 DataFrame。
+  - 取最后一行为当日净值（`current_price`），倒数第二行为前日净值（`previous_close`），支持日涨跌额（`daily_pnl`）和日涨跌幅（`daily_pnl_percent`）的计算。
+  - 缓存键格式为 `"FUNDCN:{symbol}"`（如 `"FUNDCN:000001"`），与 yfinance symbol 空间严格隔离，避免潜在的命名碰撞。
+
+- **`download_fund_cn_historical_prices(symbols: List[str], period: str) -> pd.DataFrame`**
+  - 批量拉取多只基金的历史单位净值，将 yfinance 风格的 `period` 字符串（`1mo`/`3mo`/`6mo`/`1y`/`max`）转换为天数进行时间范围截取。
+  - 返回值为标准化日期索引的 DataFrame，列名为基金代码，已去重并前向填充（`ffill`），与 `download_historical_prices` 输出格式保持一致，便于后续合并。
+
+### 3. 持仓计算分流 (`services/positions.py`)
+
+- 在 `calculate_positions()` 中的资产类型分流段新增 `FundCN` 分支：收集所有 `asset_type == "FundCN"` 的 symbol，批量调用 `fetch_fund_cn_price`，结果存入 `fund_cn_prices` 字典。
+- 在最终持仓结果生成阶段，`FundCN` 资产通过 symbol 从 `fund_cn_prices` 读取价格与前收，走与普通股票完全一致的盈亏计算路径，享有包括 `current_price`、`current_value`、`unrealized_pnl`、`previous_close`、`daily_pnl` 在内的全套指标支持。
+
+### 4. 历史净值曲线接入 (`services/portfolio_history.py`)
+
+- 在 `calculate_portfolio_history()` 的数据源分流阶段，识别出 `FundCN` 类型资产，将其 symbol 收集至独立集合 `fund_cn_symbols`，并记录对应的计价货币（通常为 `CNY`）。
+- 调用 `download_fund_cn_historical_prices` 获取历史净值 DataFrame，通过 `outer join + ffill` 与 yfinance 历史数据矩阵合并，无缝接入按日持仓估值的迭代循环，使得基金净值历史同步体现在组合总净值曲线与收益率走势图中。
+
+### 5. 前端交互 (`frontend/pages/1_💰_Accounts_&_Assets.py`)
+
+- 在"Add Asset"表单的 Asset Type 下拉框中追加 `FundCN` 选项。
+- 当用户选择 `FundCN` 时，自动显示一段中文提示，说明：Symbol 应为 6 位数字基金代码（如 `000001`）、净值通过 AkShare 每5分钟自动更新、无需像 `Custom` 类型那样手动录入价格。
+- Symbol 录入时对 `FundCN` 跳过 `.upper()` 转换，保留纯数字格式原样入库。

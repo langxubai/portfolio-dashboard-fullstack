@@ -1,6 +1,6 @@
 from typing import List, Dict
 from src.database import supabase
-from src.services.market_data import download_historical_prices, get_exchange_rates
+from src.services.market_data import download_historical_prices, get_exchange_rates, download_fund_cn_historical_prices
 from src.schemas.portfolio import PortfolioDailyHistory, PortfolioHistoryResponse
 import pandas as pd
 from datetime import datetime
@@ -28,6 +28,7 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
     # Get all involved symbols and currencies
     market_symbols = set()
     custom_assets = set()
+    fund_cn_symbols = set()
     asset_currencies = {}
     
     for tx in transactions:
@@ -35,8 +36,12 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
         if asset:
             sym = asset.get("symbol")
             cur = asset.get("currency", "CNY")
-            if asset.get("asset_type") == "Custom":
+            asset_type = asset.get("asset_type")
+            if asset_type == "Custom":
                 custom_assets.add(asset.get("id"))
+                if sym: asset_currencies[sym] = cur
+            elif asset_type == "FundCN":
+                fund_cn_symbols.add(sym)
                 if sym: asset_currencies[sym] = cur
             else:
                 market_symbols.add(sym)
@@ -44,8 +49,17 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
                 
     exchange_rates = get_exchange_rates(base_currency, list(asset_currencies.values()))
                 
-    # Download prices
+    # Download prices for yfinance-backed assets
     prices_df = download_historical_prices(list(market_symbols), period=period)
+    
+    # Download FundCN historical NAV via AkShare and merge
+    if fund_cn_symbols:
+        fund_cn_df = download_fund_cn_historical_prices(list(fund_cn_symbols), period=period)
+        if not fund_cn_df.empty:
+            if not prices_df.empty:
+                prices_df = prices_df.join(fund_cn_df, how='outer').ffill()
+            else:
+                prices_df = fund_cn_df
     
     # Optional logic: custom asset prices
     # For simplicity, we can fetch all custom asset prices and construct a dataframe

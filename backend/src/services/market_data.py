@@ -4,6 +4,13 @@ from cachetools import TTLCache, cached
 from typing import Dict, List
 import logging
 
+try:
+    import akshare as ak
+    _AKSHARE_AVAILABLE = True
+except ImportError:
+    _AKSHARE_AVAILABLE = False
+    ak = None
+
 logger = logging.getLogger(__name__)
 
 # Cache for 5 minutes (300 seconds), max 1000 items
@@ -126,6 +133,81 @@ def fetch_historical_price_for_window(symbol: str, window_minutes: int) -> Optio
     except Exception as e:
         logger.error(f"Failed to fetch historical price for window {window_minutes} of {symbol}: {e}")
         return None
+
+def fetch_fund_cn_price(symbol: str) -> Optional[Dict[str, float]]:
+    """
+    Fetches the latest NAV (Net Asset Value) for a Chinese OTC fund using AkShare.
+    The cache key is prefixed with 'FUNDCN:' to avoid collision with yfinance symbols.
+    Results are cached in the shared price_cache for 5 minutes.
+    """
+    cache_key = f"FUNDCN:{symbol}"
+    with price_cache_lock:
+        if cache_key in price_cache:
+            return price_cache[cache_key]
+
+    if not _AKSHARE_AVAILABLE:
+        logger.warning("AkShare is not installed; cannot fetch FundCN price.")
+        return None
+
+    try:
+        df = ak.fund_open_fund_info_em(symbol=symbol, indicator="单位净值走势")
+        if df is None or df.empty:
+            return None
+        # Expected columns: 净值日期, 单位净值, 日增长率
+        df = df.sort_values(by=df.columns[0])  # sort by date ascending
+        current_price = float(df.iloc[-1, 1])   # last row, nav column
+        result: Dict[str, float] = {"current_price": current_price}
+        if len(df) >= 2:
+            result["previous_close"] = float(df.iloc[-2, 1])
+        with price_cache_lock:
+            price_cache[cache_key] = result
+        return result
+    except Exception as e:
+        logger.error(f"AkShare: failed to fetch FundCN price for {symbol}: {e}")
+        return None
+
+
+def download_fund_cn_historical_prices(symbols: List[str], period: str = "1y") -> pd.DataFrame:
+    """
+    Downloads historical NAV for a list of Chinese OTC fund codes using AkShare.
+    Returns a DataFrame where index is Date and columns are fund codes.
+    The `period` parameter is mapped to a rough start date for filtering.
+    """
+    if not symbols or not _AKSHARE_AVAILABLE:
+        return pd.DataFrame()
+
+    # Map yfinance-style period strings to approximate number of days
+    period_days = {
+        "1mo": 30, "3mo": 90, "6mo": 180,
+        "ytd": 365, "1y": 365, "max": 36500,
+    }
+    days = period_days.get(period, 365)
+    cutoff = pd.Timestamp.now() - pd.Timedelta(days=days)
+
+    df_list = []
+    for symbol in symbols:
+        try:
+            df = ak.fund_open_fund_info_em(symbol=symbol, indicator="单位净值走势")
+            if df is None or df.empty:
+                continue
+            df = df.sort_values(by=df.columns[0])
+            dates = pd.to_datetime(df.iloc[:, 0]).dt.normalize()
+            navs = df.iloc[:, 1].astype(float).values
+            sym_df = pd.DataFrame({symbol: navs}, index=dates)
+            sym_df = sym_df[sym_df.index >= cutoff]
+            sym_df = sym_df[~sym_df.index.duplicated(keep='last')]
+            df_list.append(sym_df)
+        except Exception as e:
+            logger.error(f"AkShare: failed to download history for FundCN {symbol}: {e}")
+            continue
+
+    if not df_list:
+        return pd.DataFrame()
+
+    result_df = pd.concat(df_list, axis=1)
+    result_df = result_df.sort_index().ffill()
+    return result_df
+
 
 def download_historical_prices(symbols: List[str], period: str = "1y") -> pd.DataFrame:
     """

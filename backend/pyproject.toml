@@ -15,4 +15,5 @@ dependencies = [
     "supabase>=2.28.3",
     "uvicorn[standard]>=0.39.0",
     "yfinance>=1.2.0",
+    "akshare>=1.12.0",
 ]

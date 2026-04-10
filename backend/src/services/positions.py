@@ -2,7 +2,7 @@ from decimal import Decimal, InvalidOperation
 from typing import List, Dict, Tuple
 from src.database import supabase
 from src.schemas.positions import PositionResponse
-from src.services.market_data import get_current_prices
+from src.services.market_data import get_current_prices, fetch_fund_cn_price
 import logging
 
 logger = logging.getLogger(__name__)
@@ -92,18 +92,29 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
     # Fetch market data
     normal_symbols = []
     custom_asset_ids = []
+    fund_cn_symbols = []
     
     for p in active_positions:
         if "symbol" in p:
             if p.get("asset_type") == "Custom":
                 custom_asset_ids.append(p["asset_id"])
+            elif p.get("asset_type") == "FundCN":
+                fund_cn_symbols.append(p["symbol"])
             else:
                 normal_symbols.append(p["symbol"])
                 
     normal_symbols = list(set(normal_symbols))
     custom_asset_ids = list(set(custom_asset_ids))
+    fund_cn_symbols = list(set(fund_cn_symbols))
     
     current_prices = get_current_prices(normal_symbols) if normal_symbols else {}
+    
+    # Fetch FundCN prices via AkShare
+    fund_cn_prices: Dict[str, Dict[str, float]] = {}
+    for sym in fund_cn_symbols:
+        price_data = fetch_fund_cn_price(sym)
+        if price_data is not None:
+            fund_cn_prices[sym] = price_data
     
     # Fetch custom prices from DB
     # Map: asset_id -> latest price (float), fetched once ordered by recorded_at desc
@@ -139,6 +150,11 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
                 # No price ever recorded: fall back to average_cost so that
                 # current_value == total_cost and unrealized_pnl == 0.
                 price = float(pos.get("average_cost", 0) or 0)
+        elif pos.get("asset_type") == "FundCN":
+            # Chinese OTC fund: price fetched via AkShare, keyed by symbol.
+            price_data = fund_cn_prices.get(symbol, {})
+            price = price_data.get("current_price")
+            prev_close = price_data.get("previous_close")
         else:
             price_data = current_prices.get(symbol, {})
             if isinstance(price_data, float):  # defensive fallback
