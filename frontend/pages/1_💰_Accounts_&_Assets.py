@@ -127,17 +127,27 @@ with col2:
         
     st.subheader("Add Asset")
     with st.form("add_asset_form"):
-        asset_symbol = st.text_input("Symbol", placeholder="e.g. AAPL, 00700.HK, BTC-USD")
-        asset_name = st.text_input("Name", placeholder="e.g. Apple Inc., Tencent")
-        asset_type = st.selectbox("Asset Type", ["Stock", "Crypto", "Fund", "ETF", "Forex", "Custom"])
+        asset_symbol = st.text_input("Symbol", placeholder="e.g. AAPL, 00700.HK, BTC-USD, 000001")
+        asset_name = st.text_input("Name", placeholder="e.g. Apple Inc., Tencent, 华夏成长")
+        asset_type = st.selectbox("Asset Type", ["Stock", "Crypto", "Fund", "ETF", "Forex", "Custom", "FundCN"])
         asset_currency = st.selectbox("Currency", ["CNY", "USD", "HKD", "EUR", "JPY", "GBP", "SGD"], index=0)
+        
+        if asset_type == "FundCN":
+            st.info(
+                "🇨🇳 **中国场外基金（FundCN）**\n\n"
+                "- Symbol 请填写 **6位数字基金代码**，如 `000001`、`110022`\n"
+                "- 净值将自动通过 **AkShare（东方财富）** 每5分钟拉取，无需手动更新价格\n"
+                "- 货币默认选 **CNY**"
+            )
         
         submitted = st.form_submit_button("Create Asset")
         if submitted:
             if asset_symbol and asset_name:
                 try:
+                    # FundCN symbols are numeric codes — preserve their original casing
+                    symbol_to_save = asset_symbol if asset_type == "FundCN" else asset_symbol.upper()
                     api.create_asset({
-                        "symbol": asset_symbol.upper(),
+                        "symbol": symbol_to_save,
                         "name": asset_name,
                         "asset_type": asset_type,
                         "currency": asset_currency
