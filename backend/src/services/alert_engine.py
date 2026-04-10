@@ -45,9 +45,14 @@ async def evaluate_all_rules():
             if not symbol:
                 continue
 
-            current_price = fetch_single_price(symbol)
+            price_data = fetch_single_price(symbol)
+            if price_data is None:
+                continue
+            # fetch_single_price returns a Dict; extract the numeric price
+            current_price = price_data.get("current_price") if isinstance(price_data, dict) else price_data
             if current_price is None:
                 continue
+            current_price = float(current_price)
 
             rule_type = rule.get("rule_type")
             direction = rule.get("direction")

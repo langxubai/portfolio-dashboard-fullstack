@@ -1,3 +1,4 @@
+import threading
 import yfinance as yf
 from cachetools import TTLCache, cached
 from typing import Dict, List
@@ -6,11 +7,14 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Cache for 5 minutes (300 seconds), max 1000 items
+# Lock is REQUIRED: TTLCache is NOT thread-safe; concurrent access from the
+# scheduler (APScheduler) and HTTP request handlers causes intermittent 500 errors.
 price_cache = TTLCache(maxsize=1000, ttl=300)
+price_cache_lock = threading.Lock()
 
 from typing import Optional
 
-@cached(cache=price_cache)
+@cached(cache=price_cache, lock=price_cache_lock)
 def fetch_single_price(symbol: str) -> Optional[Dict[str, float]]:
     try:
         ticker = yf.Ticker(symbol)
@@ -53,7 +57,7 @@ def get_current_prices(symbols: List[str]) -> Dict[str, Dict[str, float]]:
             prices[symbol] = price_data
     return prices
 
-@cached(cache=price_cache)
+@cached(cache=price_cache, lock=price_cache_lock)
 def fetch_exchange_rate(target: str, base: str) -> float:
     """Fetch exchange rate from target currency to base currency (1 target = X base)."""
     if target.upper() == base.upper():
@@ -89,7 +93,7 @@ def get_exchange_rates(base: str, targets: List[str]) -> Dict[str, float]:
 import pandas as pd
 from datetime import timedelta
 
-@cached(cache=price_cache) # you can use a separate cache or the same if keys are different, but wait, args are different so keys will be different
+@cached(cache=price_cache, lock=price_cache_lock)
 def fetch_historical_price_for_window(symbol: str, window_minutes: int) -> Optional[float]:
     """
     Fetches the price from approximately `window_minutes` ago.

@@ -106,32 +106,46 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
     current_prices = get_current_prices(normal_symbols) if normal_symbols else {}
     
     # Fetch custom prices from DB
+    # Map: asset_id -> latest price (float), fetched once ordered by recorded_at desc
+    custom_latest_prices: Dict[str, float] = {}
     if custom_asset_ids:
         query = supabase.table("custom_asset_prices").select("asset_id, price").in_("asset_id", custom_asset_ids).order("recorded_at", desc=True)
         data, count = query.execute()
         if data and data[1]:
-            seen_assets = set()
             for row in data[1]:
                 a_id = row["asset_id"]
-                if a_id not in seen_assets:
-                    # Find symbol for this asset_id to map into current_prices
-                    for p in active_positions:
-                        if p["asset_id"] == a_id:
-                            current_prices[p["symbol"]] = float(row["price"])
-                            break
-                    seen_assets.add(a_id)
+                if a_id not in custom_latest_prices:
+                    custom_latest_prices[a_id] = float(row["price"])
+
+    # NOTE: Custom asset prices are intentionally NOT written into current_prices.
+    # current_prices is keyed by symbol, and multiple Custom assets can share the
+    # same symbol (e.g. same fund in two accounts with different asset_ids), which
+    # would cause one to overwrite the other. Instead, we resolve each Custom
+    # position's price directly by asset_id in the finalize loop below.
     
     # Finalize response
     results = []
     for pos in active_positions:
         symbol = pos["symbol"]
-        price_data = current_prices.get(symbol, {})
-        if isinstance(price_data, float): # fallback just in case
-            price = price_data
-            prev_close = None
+        prev_close = None
+
+        if pos.get("asset_type") == "Custom":
+            # For Custom assets, always resolve by asset_id to avoid symbol collisions.
+            # No previous_close concept — price is only updated manually.
+            a_id = pos["asset_id"]
+            if a_id in custom_latest_prices:
+                price = custom_latest_prices[a_id]
+            else:
+                # No price ever recorded: fall back to average_cost so that
+                # current_value == total_cost and unrealized_pnl == 0.
+                price = float(pos.get("average_cost", 0) or 0)
         else:
-            price = price_data.get("current_price")
-            prev_close = price_data.get("previous_close")
+            price_data = current_prices.get(symbol, {})
+            if isinstance(price_data, float):  # defensive fallback
+                price = price_data
+            else:
+                price = price_data.get("current_price")
+                prev_close = price_data.get("previous_close")
         
         pr_data = {
             "account_id": pos["account_id"],
