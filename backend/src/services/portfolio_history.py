@@ -79,7 +79,10 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
                 if sym:
                     asset_recs = [r for r in custom_records if r["asset_id"] == a_id]
                     if asset_recs:
-                        dates = [pd.to_datetime(r["recorded_at"]).normalize() for r in asset_recs]
+                        dates = pd.to_datetime([r["recorded_at"] for r in asset_recs])
+                        if dates.tz is not None:
+                            dates = dates.tz_localize(None)
+                        dates = dates.normalize()
                         vals = [float(r["price"]) for r in asset_recs]
                         cdf = pd.DataFrame({sym: vals}, index=dates)
                         # resample to daily and forward fill
@@ -102,8 +105,7 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
         return PortfolioHistoryResponse(history=[], period=period)
         
     # Track holdings iterativly
-    current_holdings = {} # symbol -> quantity
-    current_invested = 0.0 # simple net deposit (Buys - Sells)
+    current_holdings = {} # symbol -> {"qty": 0.0, "cost": 0.0}
     
     tx_index = 0
     num_tx = len(transactions)
@@ -111,6 +113,7 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
     for date in prices_df.index:
         date_str = str(date.date())
         # Process transactions up to this date
+        
         while tx_index < num_tx:
             tx = transactions[tx_index]
             tx_date = pd.to_datetime(tx.get('trade_time')).tz_localize(None).normalize()
@@ -123,38 +126,54 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
                     price = float(tx.get("price", 0))
                     ttype = tx.get("trade_type")
                     
-                    rate = exchange_rates.get(asset_currencies.get(sym, "CNY"), 1.0)
+                    h = current_holdings.setdefault(sym, {"qty": 0.0, "cost": 0.0})
                     
                     if ttype == "BUY":
-                        current_holdings[sym] = current_holdings.get(sym, 0.0) + qty
-                        current_invested += qty * price * rate
+                        h["qty"] += qty
+                        h["cost"] += qty * price
                     elif ttype == "SELL":
-                        current_holdings[sym] = max(0.0, current_holdings.get(sym, 0.0) - qty)
-                        current_invested -= qty * price * rate # naive net deposit calculation
+                        if h["qty"] > 0:
+                            avg_cost = h["cost"] / h["qty"]
+                            h["qty"] = max(0.0, h["qty"] - qty)
+                            h["cost"] -= qty * avg_cost
+                            if h["qty"] < 1e-8:
+                                h["qty"] = 0.0
+                                h["cost"] = 0.0
+                    
                 tx_index += 1
             else:
                 break
                 
         # Calculate end of day value
         daily_value = 0.0
-        for sym, qty in current_holdings.items():
+        daily_cost = 0.0
+        
+        for sym, data in current_holdings.items():
+            qty = data["qty"]
+            cost = data["cost"]
             if qty < 1e-8:
-                qty = 0.0
-                current_holdings[sym] = 0.0
+                current_holdings[sym] = {"qty": 0.0, "cost": 0.0}
+                continue
 
             if qty > 0 and sym in prices_df.columns:
                 p = prices_df.at[date, sym]
                 rate = exchange_rates.get(asset_currencies.get(sym, "CNY"), 1.0)
                 if not pd.isna(p):
                     daily_value += qty * float(p) * rate
+                    daily_cost += cost * rate
                     
-        return_rate = (daily_value - current_invested) / current_invested if current_invested > 0 else 0.0
-        
+        # Calculate return rate as weighted average of held assets
+        # (Total Value - Total Cost) / Total Cost
+        if daily_cost > 0:
+            return_rate = (daily_value - daily_cost) / daily_cost
+        else:
+            return_rate = 0.0
+            
         history.append(PortfolioDailyHistory(
             date=date_str,
             total_value=daily_value,
-            total_cost=current_invested,
-            net_deposit=current_invested,
+            total_cost=daily_cost,
+            net_deposit=daily_cost,  # use cost as baseline representation
             return_rate=return_rate
         ))
         

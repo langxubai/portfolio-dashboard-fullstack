@@ -191,7 +191,7 @@ def download_fund_cn_historical_prices(symbols: List[str], period: str = "1y") -
             if df is None or df.empty:
                 continue
             df = df.sort_values(by=df.columns[0])
-            dates = pd.to_datetime(df.iloc[:, 0]).dt.normalize()
+            dates = pd.to_datetime(df.iloc[:, 0]).dt.tz_localize(None).dt.normalize()
             navs = df.iloc[:, 1].astype(float).values
             sym_df = pd.DataFrame({symbol: navs}, index=dates)
             sym_df = sym_df[sym_df.index >= cutoff]
@@ -226,6 +226,8 @@ def download_historical_prices(symbols: List[str], period: str = "1y") -> pd.Dat
             sym = symbols[0]
             if "Close" in data.columns:
                 df = data[["Close"]].rename(columns={"Close": sym})
+                if df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
                 df.index = df.index.normalize() # Ensure index is just date without time
                 return df
             return pd.DataFrame()
@@ -247,6 +249,8 @@ def download_historical_prices(symbols: List[str], period: str = "1y") -> pd.Dat
             return pd.DataFrame()
             
         final_df = pd.concat(df_list, axis=1)
+        if final_df.index.tz is not None:
+            final_df.index = final_df.index.tz_localize(None)
         final_df.index = final_df.index.normalize()
         # forward fill missing prices for weekends / holidays
         final_df = final_df.ffill()
