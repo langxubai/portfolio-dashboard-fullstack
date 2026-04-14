@@ -67,6 +67,18 @@ st.subheader("Record New Transaction")
 if not accounts or not assets:
     st.warning("Please create at least one Account and one Asset before logging transactions.")
 else:
+    # Sort accounts by name, pinning the most recently added to the top
+    accounts = sorted(accounts, key=lambda x: x.get("name", "").lower())
+    latest_acc = max(accounts, key=lambda x: x.get("created_at", ""))
+    accounts.remove(latest_acc)
+    accounts.insert(0, latest_acc)
+
+    # Sort assets by symbol (asset code), pinning the most recently added to the top
+    assets = sorted(assets, key=lambda x: x.get("symbol", "").lower())
+    latest_asset = max(assets, key=lambda x: x.get("created_at", ""))
+    assets.remove(latest_asset)
+    assets.insert(0, latest_asset)
+
     # Build maps for the dropdowns
     account_map = {f"{acc['name']} ({acc['currency']})": acc["id"] for acc in accounts}
     asset_map = {f"{a['symbol']} - {a['name']}": a["id"] for a in assets}
@@ -80,7 +92,7 @@ else:
         with col2:
             trade_type = st.selectbox("Trade Type", ["BUY", "SELL", "DIVIDEND"])
             trade_date = st.date_input("Trade Date", value=datetime.today())
-            trade_time_str = st.text_input("Trade Time (HH:MM / HH:MM:SS)", value=datetime.now().strftime("%H:%M:%S"))
+            trade_time_str = st.text_input("Trade Time (e.g. 15:14, 151414)", value=datetime.now().strftime("%H:%M:%S"))
         with col3:
             st.info("💡 Fill exactly 2 of 3")
             price = st.number_input("Unit Price", min_value=0.0, format="%f", step=0.1, value=0.0)
@@ -114,7 +126,7 @@ else:
                 if calc_price > 0 and calc_qty > 0:
                     # Parse time string
                     parsed_time = None
-                    for fmt in ("%H:%M:%S", "%H:%M"):
+                    for fmt in ("%H:%M:%S", "%H:%M", "%H%M%S", "%H%M"):
                         try:
                             parsed_time = datetime.strptime(trade_time_str.strip(), fmt).time()
                             break
@@ -122,7 +134,7 @@ else:
                             pass
                     
                     if parsed_time is None:
-                        st.error("Invalid Trade Time format. Please use HH:MM or HH:MM:SS.")
+                        st.error("Invalid Trade Time format. Supported formats: HH:MM:SS, HH:MM, HHMMSS, HHMM.")
                         st.stop()
                         
                     # Combine date and time, and add timezone
