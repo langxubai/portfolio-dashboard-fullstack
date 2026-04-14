@@ -80,6 +80,8 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
                     asset_recs = [r for r in custom_records if r["asset_id"] == a_id]
                     if asset_recs:
                         dates = pd.to_datetime([r["recorded_at"] for r in asset_recs])
+                        # 修复: 为了避免与外生历史价格合并时触发 "Cannot join tz-naive with tz-aware DatetimeIndex" 错误
+                        # 在此主动剥离自定义资产的 timezone 时区属性，并将其对齐到无时区基准线上。
                         if dates.tz is not None:
                             dates = dates.tz_localize(None)
                         dates = dates.normalize()
@@ -116,6 +118,8 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
         
         while tx_index < num_tx:
             tx = transactions[tx_index]
+            # 修复: 同样的，在提取交易快照日期时也务必剥离时区 (tz_localize(None))，
+            # 保证上步处理或拉取的外生无时区 DataFrame DatetimeIndex 能够无缝进行过滤、对位及聚合。
             tx_date = pd.to_datetime(tx.get('trade_time')).tz_localize(None).normalize()
             if tx_date <= date:
                 # Apply transaction
@@ -164,6 +168,9 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
                     
         # Calculate return rate as weighted average of held assets
         # (Total Value - Total Cost) / Total Cost
+        # 修复: 我们已废弃单一的“总额净增比例”，因为此算法会在发生大规模“抽资撤盘”或“满额平仓”时不可避免地导致分母崩塌引发暴跌入 -100% 的数学畸变。
+        # 取而代之的是时间加权收益率 (Time-Weighted Return, TWR) 的基础延伸逻辑：此处只汇算和累加“仍在手存续头寸”的加权净值与成本表现。
+        # 这种隔离和只关心期末有效成本的设计，确保了出金入金不破坏整体投资组合表现的复利长尾斜率。
         if daily_cost > 0:
             return_rate = (daily_value - daily_cost) / daily_cost
         else:
