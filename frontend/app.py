@@ -69,7 +69,7 @@ else:
     
     # 2.1 History Chart
     st.markdown("##### 📈 收益率曲线图 (Return Rate Curve)")
-    period = st.selectbox("选择周期 (Select Period)", ["1mo", "3mo", "6mo", "1y", "ytd", "max"], index=3, format_func=lambda x: {"1mo": "1个月", "3mo": "3个月", "6mo": "6个月", "1y": "1年", "ytd": "今年以来", "max": "全部"}[x])
+    period = st.selectbox("选择周期 (Select Period)", ["1mo", "3mo", "6mo", "1y", "3y", "10y", "ytd", "max"], index=3, format_func=lambda x: {"1mo": "1个月", "3mo": "3个月", "6mo": "6个月", "1y": "1年", "3y": "3年", "10y": "10年", "ytd": "今年以来", "max": "全部"}[x])
     with st.spinner("Loading history..."):
         try:
             history_data = api.get_portfolio_history(period=period, base_currency=base_currency)
