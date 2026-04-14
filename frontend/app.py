@@ -117,7 +117,7 @@ else:
     with chart_col1:
         # Pie Chart: Allocation by Asset Value
         if not active_df.empty:
-            fig_pie = px.pie(active_df, values="converted_current_value", names="asset_symbol", 
+            fig_pie = px.pie(active_df, values="converted_current_value", names="asset_name", 
                              title=f"资产分配 (Asset Allocation in {base_currency})", hole=0.3)
             st.plotly_chart(fig_pie, use_container_width=True)
         else:
@@ -125,10 +125,11 @@ else:
             
     with chart_col2:
         # Bar Chart: PNL by Asset
-        if not df.empty:
-            fig_bar = px.bar(df, x="asset_symbol", y="converted_unrealized_pnl", 
+        if not active_df.empty:
+            fig_bar = px.bar(active_df, x="asset_name", y="converted_unrealized_pnl", 
                              title=f"各资产未实现收益 (Unrealized PnL in {base_currency})",
                              color="converted_unrealized_pnl", color_continuous_scale="rdylgn")
+            fig_bar.update_layout(xaxis_title=None)
             st.plotly_chart(fig_bar, use_container_width=True)
         
     st.markdown("---")

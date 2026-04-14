@@ -103,9 +103,9 @@ else:
                 if calc_price > 0 and calc_qty > 0:
                     pass # Nothing to calculate
                 elif calc_total > 0 and calc_qty > 0:
-                    calc_price = calc_total / calc_qty
+                    calc_price = round(calc_total / calc_qty, 8)
                 elif calc_total > 0 and calc_price > 0:
-                    calc_qty = calc_total / calc_price
+                    calc_qty = round(calc_total / calc_price, 8)
                 valid = True
             else:
                 st.warning("Please fill strictly TWO fields among: Unit Price, Quantity, and Total Amount (leave the 3rd as 0.0).")
