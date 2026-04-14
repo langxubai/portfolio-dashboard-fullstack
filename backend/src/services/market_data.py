@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 price_cache = TTLCache(maxsize=1000, ttl=300)
 price_cache_lock = threading.Lock()
 
+# Cache for historical data (1 hour = 3600 seconds)
+history_cache = TTLCache(maxsize=100, ttl=3600)
+history_cache_lock = threading.Lock()
+
 from typing import Optional
 
 @cached(cache=price_cache, lock=price_cache_lock)
@@ -176,10 +180,15 @@ def download_fund_cn_historical_prices(symbols: List[str], period: str = "1y") -
     if not symbols or not _AKSHARE_AVAILABLE:
         return pd.DataFrame()
 
+    cache_key = f"FUNDCN_HIST:{','.join(sorted(symbols))}:{period}"
+    with history_cache_lock:
+        if cache_key in history_cache:
+            return history_cache[cache_key].copy()
+
     # Map yfinance-style period strings to approximate number of days
     period_days = {
         "1mo": 30, "3mo": 90, "6mo": 180,
-        "ytd": 365, "1y": 365, "max": 36500,
+        "ytd": 365, "1y": 365, "3y": 365 * 3, "10y": 365 * 10, "max": 36500,
     }
     days = period_days.get(period, 365)
     cutoff = pd.Timestamp.now() - pd.Timedelta(days=days)
@@ -206,6 +215,10 @@ def download_fund_cn_historical_prices(symbols: List[str], period: str = "1y") -
 
     result_df = pd.concat(df_list, axis=1)
     result_df = result_df.sort_index().ffill()
+    
+    with history_cache_lock:
+        history_cache[cache_key] = result_df.copy()
+        
     return result_df
 
 
@@ -216,6 +229,12 @@ def download_historical_prices(symbols: List[str], period: str = "1y") -> pd.Dat
     """
     if not symbols:
         return pd.DataFrame()
+        
+    cache_key = f"YF_HIST:{','.join(sorted(symbols))}:{period}"
+    with history_cache_lock:
+        if cache_key in history_cache:
+            return history_cache[cache_key].copy()
+            
     try:
         df_list = []
         # yf.download can download multiple symbols at once
@@ -254,6 +273,10 @@ def download_historical_prices(symbols: List[str], period: str = "1y") -> pd.Dat
         final_df.index = final_df.index.normalize()
         # forward fill missing prices for weekends / holidays
         final_df = final_df.ffill()
+        
+        with history_cache_lock:
+            history_cache[cache_key] = final_df.copy()
+            
         return final_df
     except Exception as e:
         logger.error(f"Failed to download historical prices for {symbols}: {e}")

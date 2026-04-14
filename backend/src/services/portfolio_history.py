@@ -103,6 +103,11 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
                     
     # Generate daily portfolio values based on the timeframe in prices_df
     history = []
+    
+    if transactions and not prices_df.empty:
+        first_tx_date = pd.to_datetime(transactions[0].get('trade_time')).tz_localize(None).normalize()
+        prices_df = prices_df[prices_df.index >= first_tx_date]
+
     if prices_df.empty:
         return PortfolioHistoryResponse(history=[], period=period)
         
