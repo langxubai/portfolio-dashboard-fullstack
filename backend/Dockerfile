@@ -14,8 +14,8 @@ ENV UV_LINK_MODE=copy
 # Increase HTTP timeout to prevent download failures (default is 30s)
 ENV UV_HTTP_TIMEOUT=300
 
-# Use Tsinghua PyPI mirror for faster and more stable downloads in China
-ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+# Use Tsinghua PyPI mirror for faster and more stable downloads in China if needed
+# ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 # Install the project's dependencies using the lockfile and settings
 RUN --mount=type=cache,target=/root/.cache/uv \
