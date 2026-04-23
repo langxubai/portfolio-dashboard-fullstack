@@ -132,76 +132,63 @@ finance-board/
 
 ## 7. 如何启动与测试应用 (How to Run and Test)
 
-本项目采用前后端分离式架构，由于利用 `uv` 进行了依赖隔离，您需要分别启动后端 API 服务与前端 Web 面板。
+本项目支持 **Docker 一键容器化部署** 以及 **本地 `uv` 源码隔离启动** 两种模式。您可以根据自己的使用场景进行选择。
 
-### 第一步(本地)：启动 FastAPI 后端环境
+### 方案一：使用 Docker Compose 一键启动（推荐，适合云端/生产环境部署）
 
-后端负责接收数据读写请求、拉取行情以及运行定时规则报警引擎：
+利用 Docker，您可以免去繁杂的环境依赖配置，一键拉起前后端服务，并自动处理网络映射。
 
-1. 进入后端目录：`cd backend`
-2. 确保您已经根目录下设置了 `.env` 并配置好 Supabase。
-3. 启动并持续运行后端：
+1. **配置环境变量：**
+   进入 `backend` 目录，将环境变量模板拷贝一份并配置好 Supabase 相关的凭证（URL与密钥）：
    ```bash
-   uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
-   ```
-4. 后端将默认运行在 `http://127.0.0.1:8000`（并允许局域网或 Tailscale 进行访问）。您可以立刻访问 `http://127.0.0.1:8000/docs` 查看并测试自动生成的 Swagger API 文档。
-
-### 第一步(云端)：启动 FastAPI 后端环境
-
-1. ssh 连接到云服务器：
-   ```bash
-   ssh -i ~/.ssh/your_key.key ubuntu@[IP_ADDRESS]
-   ```
-2. 进入后端目录：`cd backend`
-3. 拷贝根目录下的 `.env.example` 到 `.env` 文件：
-   ```bash
-   cp ../.env.example .env
-   ```
-   并编辑环境文件配置好密钥：
-   ```bash
+   cd backend
+   cp .env.example .env
    nano .env
+   cd ..
    ```
-4. 启动进程保护：
+
+2. **一键构建与启动：**
+   在项目根目录下运行以下命令：
    ```bash
-   tmux new -s finance-board-backend
+   docker-compose up -d --build
    ```
-4. 启动并持续运行后端：
+   该命令会在后台自动构建 `frontend` 和 `backend` 镜像并启动容器。
+
+3. **访问服务：**
+   * **前端控制台:** 浏览器访问 `http://localhost:8501` (若部署在云端则替换为服务器 IP)
+   * **后端 API 文档:** 浏览器访问 `http://localhost:8000/docs`
+
+4. **常用管理命令：**
+   * 查看运行日志：`docker-compose logs -f`
+   * 停止并移除容器：`docker-compose down`
+
+### 方案二：本地手动依赖启动（适合开发调试）
+
+由于利用了 `uv` 进行依赖与虚拟环境的极速隔离，您也可以选择分别在终端中拉起前后端服务。
+
+#### 1. 启动 FastAPI 后端环境
+
+1. 进入后端目录并配置好 `.env`（包含 Supabase 凭证）。
+2. 启动并持续运行后端：
    ```bash
+   cd backend
    uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
    ```
-5. 后端将默认运行在 `http://[IP_ADDRESS]`（并允许局域网或 Tailscale 进行访问）。您可以立刻访问 `http://[IP_ADDRESS]/docs` 查看并测试自动生成的 Swagger API 文档。
+3. 后端将默认运行在 `http://127.0.0.1:8000`。您可以立刻访问 `/docs` 路径测试自动生成的 Swagger API 文档。
 
-6. 临时退出 tmux 会话，但不结束进程：
-   ```bash
-   Ctrl + b, d
-   ```
-7. 重新进入 tmux 会话：
-   ```bash
-   tmux attach -t finance-board-backend
-   ```
-8. 彻底退出 tmux 会话：
-   ```bash
-   exit
-   ```
+*(附加：如果是在云端且不使用 Docker，可通过 tmux 进行后台保活：运行 `tmux new -s finance-board-backend` 后再启动服务，随后使用 `Ctrl + b, d` 挂起即可。)*
 
-9. 退出 ssh 连接：
-   ```bash
-   exit
-   ```
-   或者
-   ```bash
-   Ctrl + d
-   ```
+#### 2. 启动 Streamlit 前端看板
 
-### 第二步（本地）：启动 Streamlit 前端看板
-
-1. 进入前端目录：`cd frontend`
-2. 确保您已经在根目录下设置了 `.env` 并配置好 Supabase 的关联信息。
-3. 启动应用：
+1. 另开一个终端窗口，进入前端目录：
+   ```bash
+   cd frontend
+   ```
+2. 启动应用：
    ```bash
    uv run streamlit run app.py
    ```
-4. 浏览器将自动打开并运行在 `http://localhost:8501`。
+3. 浏览器将自动打开并运行在 `http://localhost:8501`。
 
 ---
 
@@ -218,7 +205,8 @@ finance-board/
 5. 历史回顾功能：回顾过去某个指定时刻的持仓情况和对应的收益情况。（基于此可以引入ai分析持仓倾向、资产配置等。也可以不基于此？但是首先需要数据清洗！！！不保留券商名称，只保留券商uuid；不保留绝对金额，仓位占比；不保留交易时间，只保留交易日期）
 6. 设计前端和后端的登录功能。目前为了实现iOS的Scriptable小组件功能，后端api暴露在外，但是这样不安全，所以需要后端增加登录功能。如果想要实现前端部署在云上（推荐域名stocks.*），前端同样也需要登录功能，要不然谁拿到网址都能看到我的资产信息。
 7. 合并仓库。(✅已解决：使用 git-filter-repo 重写并合并了 frontend 和 backend 的 git 及其历史记录为单一的根仓库)
-8. 分别封装到docker容器（写入dockerfile和docker yml），也可以封装到openclaw。（目前我的开发环境是mac arm orbstack）。
+8. 分别封装到docker容器（写入dockerfile和docker yml）。 *(✅已完成：为 frontend 和 backend 分别编写了 Dockerfile，并在根目录创建了 docker-compose.yml 统一编排部署。)*
+9. 也可以封装到openclaw。（目前我的开发环境是mac arm orbstack）。
 
 ### 后续有时间再说的计划
 1. 检查卖出份额不超过持仓份额？也许可以用负份额表示负债？
