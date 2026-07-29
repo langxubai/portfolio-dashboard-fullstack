@@ -123,5 +123,8 @@ class FinanceAPIClient:
             return {}
         return self._request("GET", "/api/market/exchange-rates", params={"base": base, "targets": targets})
 
+    def get_market_status(self) -> Dict[str, Any]:
+        return self._request("GET", "/api/market/status")
+
 
 api = FinanceAPIClient()

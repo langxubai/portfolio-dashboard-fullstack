@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
 from src.database import supabase
@@ -45,7 +46,9 @@ async def evaluate_all_rules():
             if not symbol:
                 continue
 
-            price_data = fetch_single_price(symbol)
+            # Provider clients are synchronous. Running them on the asyncio
+            # event loop would freeze unrelated FastAPI requests.
+            price_data = await asyncio.to_thread(fetch_single_price, symbol)
             if price_data is None:
                 continue
             # fetch_single_price returns a Dict; extract the numeric price
@@ -72,7 +75,11 @@ async def evaluate_all_rules():
             
             elif rule_type in ["CHANGE_PERCENT", "CHANGE_ABS"]:
                 time_window = rule.get("time_window_minutes", 60)
-                historical_price = fetch_historical_price_for_window(symbol, time_window)
+                historical_price = await asyncio.to_thread(
+                    fetch_historical_price_for_window,
+                    symbol,
+                    time_window,
+                )
                 if historical_price:
                     change_abs = current_price - historical_price
                     change_pct = (change_abs / historical_price) * 100 if historical_price else 0

@@ -195,3 +195,40 @@ backend/
 
 ### 4. Custom 价格记录并发污染修正
 - **重名资产污染隔离**：修正了针对用户在不同账户下同时建立名称或代码冲突的 Custom 资产时，全局组合估算价格错误互相覆写混合投喂的 BUG。现在依靠底层 `asset_id` （UUID）做到彻底安全隔离查询；并在局部时间窗无更新时自动沿用前值的最新沉淀。
+
+---
+
+## 开发阶段总结：后台行情快照与故障可观测性
+
+### 请求路径
+
+- Web API 不再调用 Yahoo Finance 或 AkShare。
+- `refresh_market_quotes` 每 5 分钟刷新最新价格和汇率。
+- `refresh_market_history` 每小时刷新历史价格 JSON。
+- 两个任务由 APScheduler 在线程执行器中运行，外部服务卡顿不会阻塞 FastAPI
+  的 asyncio 事件循环。
+
+### 数据表
+
+- `market_asset_snapshots`：按 `asset_id` 保存最后成功价格、前收、历史序列、
+  数据源、尝试时间、成功时间和错误。
+- `market_fx_snapshots`：保存币种对的最后成功汇率和采集状态。
+- 两表启用 RLS，明确撤销 `anon`/`authenticated` 权限，只授权
+  `service_role`。后端应使用 `SUPABASE_SERVICE_KEY`。
+
+### 降级语义
+
+- 本轮刷新失败但存在旧价格：返回旧值并标记 `stale`。
+- 从未成功采集：价格和市值返回 `null`，标记 `unavailable`，不会伪装成 0。
+- 汇率缺失：不再回退为 `1.0`，相关持仓从合并估值中排除并显示警告。
+- 快照表尚未安装：接口快速返回明确的数据库升级提示，不等待外部行情。
+
+### 运行检查
+
+```bash
+curl http://127.0.0.1:8000/api/market/status
+docker compose logs -f backend
+```
+
+Apple Silicon 容器会在构建时为 AkShare 间接依赖
+`py-mini-racer 0.6.0` 建立正确的 AArch64 动态库文件名。

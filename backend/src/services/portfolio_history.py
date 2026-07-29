@@ -1,9 +1,12 @@
 from typing import List, Dict
 from src.database import supabase
-from src.services.market_data import download_historical_prices, get_exchange_rates, download_fund_cn_historical_prices
+from src.services.market_store import (
+    get_cached_exchange_rates,
+    load_asset_snapshots,
+)
 from src.schemas.portfolio import PortfolioDailyHistory, PortfolioHistoryResponse
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,8 +19,8 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
     if account_id:
         query = query.eq("account_id", account_id)
         
-    data, count = query.execute()
-    transactions = data[1] if data else []
+    response = query.execute()
+    transactions = getattr(response, "data", None) or []
     
     # Sort chronologically
     transactions.sort(key=lambda x: x.get('trade_time', ''))
@@ -25,11 +28,12 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
     if not transactions:
         return PortfolioHistoryResponse(history=[], period=period)
         
-    # Get all involved symbols and currencies
-    market_symbols = set()
+    # Get all involved asset ids, symbols and currencies.
+    market_assets = {}
     custom_assets = set()
-    fund_cn_symbols = set()
     asset_currencies = {}
+    warnings = []
+    snapshot_times = []
     
     for tx in transactions:
         asset = tx.get("assets")
@@ -40,34 +44,65 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
             if asset_type == "Custom":
                 custom_assets.add(asset.get("id"))
                 if sym: asset_currencies[sym] = cur
-            elif asset_type == "FundCN":
-                fund_cn_symbols.add(sym)
-                if sym: asset_currencies[sym] = cur
             else:
-                market_symbols.add(sym)
-                asset_currencies[sym] = cur
-                
-    exchange_rates = get_exchange_rates(base_currency, list(asset_currencies.values()))
-                
-    # Download prices for yfinance-backed assets
-    prices_df = download_historical_prices(list(market_symbols), period=period)
-    
-    # Download FundCN historical NAV via AkShare and merge
-    if fund_cn_symbols:
-        fund_cn_df = download_fund_cn_historical_prices(list(fund_cn_symbols), period=period)
-        if not fund_cn_df.empty:
-            if not prices_df.empty:
-                prices_df = prices_df.join(fund_cn_df, how='outer').ffill()
-            else:
-                prices_df = fund_cn_df
+                asset_id = asset.get("id")
+                if asset_id and sym:
+                    market_assets[str(asset_id)] = {
+                        "symbol": sym,
+                        "name": asset.get("name") or sym,
+                    }
+                    asset_currencies[sym] = cur
+
+    exchange_rates, fx_snapshots, fx_store_error = get_cached_exchange_rates(
+        base_currency,
+        list(asset_currencies.values()),
+    )
+    if fx_store_error:
+        warnings.append(fx_store_error)
+    for currency in set(asset_currencies.values()):
+        if currency.upper() != base_currency.upper() and currency.upper() not in exchange_rates:
+            warnings.append(f"缺少 {currency}/{base_currency} 汇率快照。")
+
+    # Fast request path: build the historical price matrix from one persisted
+    # snapshot query. Provider downloads only happen in market_collector.py.
+    market_snapshots, market_store_error = load_asset_snapshots(market_assets.keys())
+    if market_store_error:
+        warnings.append(market_store_error)
+
+    market_frames = []
+    for asset_id, asset_info in market_assets.items():
+        snapshot = market_snapshots.get(asset_id)
+        symbol = asset_info["symbol"]
+        if not snapshot:
+            warnings.append(f"{symbol} 尚无历史行情快照。")
+            continue
+        history = snapshot.get("history") or {}
+        if not history:
+            detail = snapshot.get("history_error") or "后台尚未完成历史采集。"
+            warnings.append(f"{symbol}: {detail}")
+            continue
+        series = pd.Series(
+            {pd.Timestamp(day): float(close) for day, close in history.items()},
+            name=symbol,
+            dtype=float,
+        ).sort_index()
+        market_frames.append(series.to_frame())
+        if snapshot.get("history_fetched_at"):
+            snapshot_times.append(snapshot["history_fetched_at"])
+
+    prices_df = (
+        pd.concat(market_frames, axis=1).sort_index().ffill()
+        if market_frames
+        else pd.DataFrame()
+    )
     
     # Optional logic: custom asset prices
     # For simplicity, we can fetch all custom asset prices and construct a dataframe
     if custom_assets:
         custom_query = supabase.table("custom_asset_prices").select("*").in_("asset_id", list(custom_assets)).order("recorded_at", desc=False)
-        cdata, ccount = custom_query.execute()
-        if cdata and cdata[1]:
-            custom_records = cdata[1]
+        custom_response = custom_query.execute()
+        custom_records = getattr(custom_response, "data", None) or []
+        if custom_records:
             cdfs = []
             for a_id in custom_assets:
                 # get symbol for this a_id
@@ -107,9 +142,18 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
     if transactions and not prices_df.empty:
         first_tx_date = pd.to_datetime(transactions[0].get('trade_time')).tz_localize(None).normalize()
         prices_df = prices_df[prices_df.index >= first_tx_date]
+        cutoff = _period_cutoff(period)
+        if cutoff is not None:
+            prices_df = prices_df[prices_df.index >= cutoff]
 
     if prices_df.empty:
-        return PortfolioHistoryResponse(history=[], period=period)
+        return PortfolioHistoryResponse(
+            history=[],
+            period=period,
+            data_status="unavailable",
+            warnings=_dedupe(warnings),
+            data_as_of=_latest_time(snapshot_times),
+        )
         
     # Track holdings iterativly
     current_holdings = {} # symbol -> {"qty": 0.0, "cost": 0.0}
@@ -166,7 +210,10 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
 
             if qty > 0 and sym in prices_df.columns:
                 p = prices_df.at[date, sym]
-                rate = exchange_rates.get(asset_currencies.get(sym, "CNY"), 1.0)
+                currency = asset_currencies.get(sym, "CNY").upper()
+                rate = exchange_rates.get(currency)
+                if rate is None:
+                    continue
                 if not pd.isna(p):
                     daily_value += qty * float(p) * rate
                     daily_cost += cost * rate
@@ -189,4 +236,41 @@ def calculate_portfolio_history(period: str = "1y", account_id: str = None, base
             return_rate=return_rate
         ))
         
-    return PortfolioHistoryResponse(history=history, period=period)
+    return PortfolioHistoryResponse(
+        history=history,
+        period=period,
+        data_status="partial" if warnings else "ok",
+        warnings=_dedupe(warnings),
+        data_as_of=_latest_time(snapshot_times),
+    )
+
+
+def _period_cutoff(period: str):
+    now = pd.Timestamp.now().tz_localize(None).normalize()
+    if period == "ytd":
+        return pd.Timestamp(year=now.year, month=1, day=1)
+    days = {
+        "1mo": 30,
+        "3mo": 90,
+        "6mo": 180,
+        "1y": 365,
+        "3y": 365 * 3,
+        "10y": 365 * 10,
+    }.get(period)
+    return now - pd.Timedelta(days=days) if days else None
+
+
+def _dedupe(messages):
+    return list(dict.fromkeys(message for message in messages if message))
+
+
+def _latest_time(values):
+    parsed = []
+    for value in values:
+        try:
+            parsed.append(
+                datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            )
+        except (TypeError, ValueError):
+            continue
+    return max(parsed) if parsed else None

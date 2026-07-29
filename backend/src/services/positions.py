@@ -1,8 +1,9 @@
 from decimal import Decimal, InvalidOperation
-from typing import List, Dict, Tuple
+from datetime import datetime, timezone
+from typing import List, Dict
 from src.database import supabase
 from src.schemas.positions import PositionResponse
-from src.services.market_data import get_current_prices, fetch_fund_cn_price
+from src.services.market_store import load_asset_snapshots
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,8 +17,8 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
     if account_id:
         query = query.eq("account_id", account_id)
         
-    data, count = query.execute()
-    transactions = data[1]
+    response = query.execute()
+    transactions = getattr(response, "data", None) or []
     
     # Sort transactions chronologically to calculate cost correctly
     # Assumes trade_time is in ISO format
@@ -90,43 +91,39 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
             active_positions.append(pos)
             
     # Fetch market data
-    normal_symbols = []
+    market_asset_ids = []
     custom_asset_ids = []
-    fund_cn_symbols = []
     
     for p in active_positions:
         if "symbol" in p:
             if p.get("asset_type") == "Custom":
                 custom_asset_ids.append(p["asset_id"])
-            elif p.get("asset_type") == "FundCN":
-                fund_cn_symbols.append(p["symbol"])
             else:
-                normal_symbols.append(p["symbol"])
+                market_asset_ids.append(p["asset_id"])
                 
-    normal_symbols = list(set(normal_symbols))
+    market_asset_ids = list(set(market_asset_ids))
     custom_asset_ids = list(set(custom_asset_ids))
-    fund_cn_symbols = list(set(fund_cn_symbols))
-    
-    current_prices = get_current_prices(normal_symbols) if normal_symbols else {}
-    
-    # Fetch FundCN prices via AkShare
-    fund_cn_prices: Dict[str, Dict[str, float]] = {}
-    for sym in fund_cn_symbols:
-        price_data = fetch_fund_cn_price(sym)
-        if price_data is not None:
-            fund_cn_prices[sym] = price_data
+
+    # Fast request path: read last-known-good snapshots only. Slow Yahoo/AkShare
+    # calls are performed by APScheduler jobs in market_collector.py.
+    market_snapshots, market_store_error = load_asset_snapshots(market_asset_ids)
     
     # Fetch custom prices from DB
-    # Map: asset_id -> latest price (float), fetched once ordered by recorded_at desc
-    custom_latest_prices: Dict[str, float] = {}
+    # Map: asset_id -> latest manually recorded row.
+    custom_latest_prices: Dict[str, Dict] = {}
     if custom_asset_ids:
-        query = supabase.table("custom_asset_prices").select("asset_id, price").in_("asset_id", custom_asset_ids).order("recorded_at", desc=True)
-        data, count = query.execute()
-        if data and data[1]:
-            for row in data[1]:
-                a_id = row["asset_id"]
-                if a_id not in custom_latest_prices:
-                    custom_latest_prices[a_id] = float(row["price"])
+        query = (
+            supabase.table("custom_asset_prices")
+            .select("asset_id,price,recorded_at")
+            .in_("asset_id", custom_asset_ids)
+            .order("recorded_at", desc=True)
+        )
+        response = query.execute()
+        rows = getattr(response, "data", None) or []
+        for row in rows:
+            a_id = row["asset_id"]
+            if a_id not in custom_latest_prices:
+                custom_latest_prices[a_id] = row
 
     # NOTE: Custom asset prices are intentionally NOT written into current_prices.
     # current_prices is keyed by symbol, and multiple Custom assets can share the
@@ -139,29 +136,57 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
     for pos in active_positions:
         symbol = pos["symbol"]
         prev_close = None
+        price = None
+        price_status = "unavailable"
+        price_source = None
+        price_as_of = None
+        price_is_stale = False
+        price_error = None
 
         if pos.get("asset_type") == "Custom":
             # For Custom assets, always resolve by asset_id to avoid symbol collisions.
             # No previous_close concept — price is only updated manually.
             a_id = pos["asset_id"]
             if a_id in custom_latest_prices:
-                price = custom_latest_prices[a_id]
+                custom_row = custom_latest_prices[a_id]
+                price = float(custom_row["price"])
+                price_status = "ok"
+                price_source = "manual"
+                price_as_of = custom_row.get("recorded_at")
             else:
-                # No price ever recorded: fall back to average_cost so that
-                # current_value == total_cost and unrealized_pnl == 0.
-                price = float(pos.get("average_cost", 0) or 0)
-        elif pos.get("asset_type") == "FundCN":
-            # Chinese OTC fund: price fetched via AkShare, keyed by symbol.
-            price_data = fund_cn_prices.get(symbol, {})
-            price = price_data.get("current_price")
-            prev_close = price_data.get("previous_close")
+                price_error = "尚未录入自定义资产价格。"
         else:
-            price_data = current_prices.get(symbol, {})
-            if isinstance(price_data, float):  # defensive fallback
-                price = price_data
+            snapshot = market_snapshots.get(str(pos["asset_id"]))
+            if snapshot:
+                price = snapshot.get("current_price")
+                prev_close = snapshot.get("previous_close")
+                price_source = snapshot.get("source")
+                price_as_of = snapshot.get("quote_fetched_at")
+                price_error = snapshot.get("quote_error")
+                quote_status = snapshot.get("quote_status", "unavailable")
+                if price is not None:
+                    price_status = quote_status
+                    if price_as_of:
+                        try:
+                            fetched_at = datetime.fromisoformat(
+                                str(price_as_of).replace("Z", "+00:00")
+                            )
+                            age_seconds = (
+                                datetime.now(timezone.utc) - fetched_at
+                            ).total_seconds()
+                            price_is_stale = age_seconds > 900
+                        except (TypeError, ValueError):
+                            price_is_stale = True
+                    else:
+                        price_is_stale = True
+                    if quote_status != "ok" or price_is_stale:
+                        price_status = "stale"
+                else:
+                    price_status = (
+                        "error" if quote_status == "error" else "unavailable"
+                    )
             else:
-                price = price_data.get("current_price")
-                prev_close = price_data.get("previous_close")
+                price_error = market_store_error or "后台尚未生成该资产的行情快照。"
         
         pr_data = {
             "account_id": pos["account_id"],
@@ -172,7 +197,12 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
             "currency": pos["currency"],
             "total_quantity": round(pos["total_quantity"], 8).normalize(),
             "average_cost": round(pos["average_cost"], 8).normalize(),
-            "realized_pnl": round(pos["realized_pnl"], 4)
+            "realized_pnl": round(pos["realized_pnl"], 4),
+            "price_status": price_status,
+            "price_source": price_source,
+            "price_as_of": price_as_of,
+            "price_is_stale": price_is_stale,
+            "price_error": price_error,
         }
         
         if pos["realized_cost"] > Decimal("0"):

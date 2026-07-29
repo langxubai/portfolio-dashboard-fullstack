@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from decimal import Decimal
 from typing import Optional
+from datetime import datetime
 
 class PositionResponse(BaseModel):
     account_id: str
@@ -25,3 +26,12 @@ class PositionResponse(BaseModel):
     
     daily_pnl: Optional[Decimal] = None
     daily_pnl_percent: Optional[Decimal] = None
+
+    # Market-data observability. A stale quote may still carry a usable
+    # current_price, while unavailable means the position is intentionally
+    # excluded from portfolio valuation instead of being treated as zero.
+    price_status: str = "unavailable"
+    price_source: Optional[str] = None
+    price_as_of: Optional[datetime] = None
+    price_is_stale: bool = False
+    price_error: Optional[str] = None

@@ -1,6 +1,6 @@
-from pydantic import BaseModel
-from typing import List
-from datetime import date
+from pydantic import BaseModel, Field
+from typing import List, Optional
+from datetime import datetime
 
 class PortfolioDailyHistory(BaseModel):
     date: str
@@ -12,3 +12,6 @@ class PortfolioDailyHistory(BaseModel):
 class PortfolioHistoryResponse(BaseModel):
     history: List[PortfolioDailyHistory]
     period: str
+    data_status: str = "ok"
+    warnings: List[str] = Field(default_factory=list)
+    data_as_of: Optional[datetime] = None

@@ -63,3 +63,63 @@ CREATE TABLE IF NOT EXISTS custom_asset_prices (
 
 CREATE INDEX IF NOT EXISTS idx_custom_asset_prices_asset_id ON custom_asset_prices(asset_id);
 CREATE INDEX IF NOT EXISTS idx_custom_asset_prices_recorded_at ON custom_asset_prices(recorded_at DESC);
+
+-- 6. 后台行情快照表
+--
+-- Web 请求只读取这里的最近一次成功结果，不直接等待 Yahoo Finance / AkShare。
+-- history 使用 JSONB 保存 {YYYY-MM-DD: close}，个人看板可以一次读取全部资产，
+-- 避免 Supabase Data API 默认 1000 行上限造成多次分页往返。
+CREATE TABLE IF NOT EXISTS market_asset_snapshots (
+    asset_id UUID PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+    symbol TEXT NOT NULL,
+    source TEXT NOT NULL,
+    current_price DECIMAL(24, 8),
+    previous_close DECIMAL(24, 8),
+    quote_status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (quote_status IN ('pending', 'ok', 'error')),
+    quote_error TEXT,
+    quote_attempted_at TIMESTAMP WITH TIME ZONE,
+    quote_fetched_at TIMESTAMP WITH TIME ZONE,
+    history JSONB NOT NULL DEFAULT '{}'::jsonb,
+    history_status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (history_status IN ('pending', 'ok', 'error')),
+    history_error TEXT,
+    history_attempted_at TIMESTAMP WITH TIME ZONE,
+    history_fetched_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_asset_snapshots_quote_status
+    ON market_asset_snapshots(quote_status);
+CREATE INDEX IF NOT EXISTS idx_market_asset_snapshots_updated_at
+    ON market_asset_snapshots(updated_at DESC);
+
+-- 7. 后台汇率快照表（1 target currency = rate * base currency）
+CREATE TABLE IF NOT EXISTS market_fx_snapshots (
+    pair TEXT PRIMARY KEY,
+    target_currency TEXT NOT NULL,
+    base_currency TEXT NOT NULL,
+    rate DECIMAL(24, 10),
+    source TEXT NOT NULL DEFAULT 'yfinance',
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'ok', 'error')),
+    error TEXT,
+    attempted_at TIMESTAMP WITH TIME ZONE,
+    fetched_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    UNIQUE (target_currency, base_currency)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_fx_snapshots_status
+    ON market_fx_snapshots(status);
+
+-- public 是 Supabase 默认暴露的 schema。行情快照只允许后端 service_role
+-- 访问；不要给 anon/authenticated 添加宽泛策略。
+ALTER TABLE market_asset_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE market_fx_snapshots ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE market_asset_snapshots FROM anon, authenticated;
+REVOKE ALL ON TABLE market_fx_snapshots FROM anon, authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE market_asset_snapshots TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE market_fx_snapshots TO service_role;

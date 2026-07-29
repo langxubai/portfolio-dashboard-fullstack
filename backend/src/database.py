@@ -7,7 +7,10 @@ load_dotenv()
 
 # 获取 Supabase 配置
 SUPABASE_URL: str = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY: str = os.environ.get("SUPABASE_KEY")
+# Server-side background jobs need a service-role key to write the protected
+# market snapshot tables. Keep SUPABASE_KEY as a backwards-compatible fallback
+# for existing local setups, but never expose either value to the frontend.
+SUPABASE_KEY: str = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_KEY")
 
 def get_supabase_client() -> Client:
     """初始化并返回 Supabase 客户端实例"""

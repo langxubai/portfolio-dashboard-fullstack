@@ -7,6 +7,9 @@ WORKDIR /app
 
 # Enable bytecode compilation
 ENV UV_COMPILE_BYTECODE=1
+# Use the Python runtime provided by the base image instead of downloading the
+# older version from .python-version inside the Linux container.
+ENV UV_PYTHON=/usr/local/bin/python3.11
 
 # Copy from the cache instead of linking since it's a mounted volume
 ENV UV_LINK_MODE=copy
@@ -28,6 +31,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 ADD . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
+
+# py-mini-racer 0.6.0 ships a working AArch64 glibc library under an incorrect
+# filename. AkShare looks for libmini_racer.glibc.so, so expose the packaged ARM
+# binary under the name expected by its loader. The binary is verified as
+# AArch64 during development; this block is a no-op on amd64.
+RUN if [ "$(uname -m)" = "aarch64" ]; then \
+      racer_dir="$(find /app/.venv/lib -type d -path '*/site-packages/py_mini_racer' -print -quit)"; \
+      if [ -n "$racer_dir" ] && [ -f "$racer_dir/armlibmini_racer.glibc.so" ]; then \
+        ln -sf armlibmini_racer.glibc.so "$racer_dir/libmini_racer.glibc.so"; \
+      fi; \
+    fi
 
 EXPOSE 8000
 

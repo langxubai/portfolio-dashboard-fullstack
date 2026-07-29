@@ -1,8 +1,10 @@
 import threading
 import yfinance as yf
 from cachetools import TTLCache, cached
-from typing import Dict, List
+from typing import Dict, List, Optional
 import logging
+import os
+import pandas as pd
 
 try:
     import akshare as ak
@@ -23,37 +25,82 @@ price_cache_lock = threading.Lock()
 history_cache = TTLCache(maxsize=100, ttl=3600)
 history_cache_lock = threading.Lock()
 
-from typing import Optional
+YFINANCE_TIMEOUT_SECONDS = float(os.environ.get("YFINANCE_TIMEOUT_SECONDS", "8"))
+
+
+def _extract_close_series(data: pd.DataFrame, symbol: str) -> pd.Series:
+    """Handle both yfinance MultiIndex layouts and the single-symbol layout."""
+    if data is None or data.empty:
+        return pd.Series(dtype=float)
+
+    try:
+        if isinstance(data.columns, pd.MultiIndex):
+            level_zero = set(data.columns.get_level_values(0))
+            if symbol in level_zero:
+                series = data[symbol]["Close"]
+            elif "Close" in level_zero:
+                series = data["Close"][symbol]
+            else:
+                return pd.Series(dtype=float)
+        elif "Close" in data.columns:
+            series = data["Close"]
+        else:
+            return pd.Series(dtype=float)
+        return pd.to_numeric(series, errors="coerce").dropna()
+    except (KeyError, TypeError):
+        return pd.Series(dtype=float)
+
+
+def fetch_yfinance_quotes(
+    symbols: List[str],
+) -> tuple[Dict[str, Dict[str, float]], Optional[str]]:
+    """Fetch several Yahoo quotes in one bounded request.
+
+    This function is intended for the background collector. Request handlers
+    read persisted snapshots and never invoke it.
+    """
+    unique_symbols = sorted({symbol for symbol in symbols if symbol})
+    if not unique_symbols:
+        return {}, None
+
+    try:
+        data = yf.download(
+            unique_symbols,
+            period="5d",
+            interval="1d",
+            group_by="ticker",
+            progress=False,
+            threads=True,
+            timeout=YFINANCE_TIMEOUT_SECONDS,
+        )
+        prices: Dict[str, Dict[str, float]] = {}
+        for symbol in unique_symbols:
+            closes = _extract_close_series(data, symbol)
+            if closes.empty:
+                continue
+            current_price = float(closes.iloc[-1])
+            previous_close = (
+                float(closes.iloc[-2]) if len(closes) >= 2 else current_price
+            )
+            prices[symbol] = {
+                "current_price": current_price,
+                "previous_close": previous_close,
+            }
+        if not prices:
+            return {}, "Yahoo Finance 未返回任何可用价格。"
+        missing = sorted(set(unique_symbols) - set(prices))
+        error = f"Yahoo Finance 缺少代码：{', '.join(missing)}" if missing else None
+        return prices, error
+    except Exception as exc:
+        logger.exception("Yahoo Finance batch quote request failed")
+        return {}, f"Yahoo Finance 请求失败：{str(exc)[:240]}"
 
 @cached(cache=price_cache, lock=price_cache_lock)
 def fetch_single_price(symbol: str) -> Optional[Dict[str, float]]:
-    try:
-        ticker = yf.Ticker(symbol)
-        price_data = {}
-        # fast_info is much faster for getting live quotes without downloading history
-        if hasattr(ticker, "fast_info"):
-            if 'last_price' in ticker.fast_info:
-                price_data['current_price'] = float(ticker.fast_info['last_price'])
-            if 'previous_close' in ticker.fast_info:
-                price_data['previous_close'] = float(ticker.fast_info['previous_close'])
-                
-        if 'current_price' in price_data and 'previous_close' in price_data:
-             return price_data
-             
-        # Fallback to fetching today's history
-        df = ticker.history(period="5d")
-        if not df.empty:
-            price_data['current_price'] = float(df['Close'].iloc[-1])
-            if len(df) > 1:
-                price_data['previous_close'] = float(df['Close'].iloc[-2])
-            else:
-                price_data['previous_close'] = price_data['current_price']
-            return price_data
-            
-        return None
-    except Exception as e:
-        logger.error(f"Failed to fetch price for {symbol}: {e}")
-        return None
+    prices, error = fetch_yfinance_quotes([symbol])
+    if error:
+        logger.error("Failed to fetch price for %s: %s", symbol, error)
+    return prices.get(symbol)
 
 def get_current_prices(symbols: List[str]) -> Dict[str, Dict[str, float]]:
     """
@@ -74,21 +121,19 @@ def fetch_exchange_rate(target: str, base: str) -> float:
     if target.upper() == base.upper():
         return 1.0
     
-    # yfinance uses symbols like USDCNY=X for USD to CNY
     symbol = f"{target.upper()}{base.upper()}=X"
-    try:
-        ticker = yf.Ticker(symbol)
-        if hasattr(ticker, "fast_info") and 'last_price' in ticker.fast_info:
-            return float(ticker.fast_info['last_price'])
-        
-        # Fallback
-        df = ticker.history(period="1d")
-        if not df.empty:
-            return float(df['Close'].iloc[-1])
-    except Exception as e:
-        logger.error(f"Failed to fetch exchange rate for {target} to {base}: {e}")
-    
-    return 1.0  # Safe fallback if fetching fails
+    prices, error = fetch_yfinance_quotes([symbol])
+    if error:
+        logger.error(
+            "Failed to fetch exchange rate for %s to %s: %s",
+            target,
+            base,
+            error,
+        )
+    price_data = prices.get(symbol)
+    if price_data:
+        return float(price_data["current_price"])
+    raise RuntimeError(f"Exchange rate unavailable for {target}/{base}")
 
 def get_exchange_rates(base: str, targets: List[str]) -> Dict[str, float]:
     """
@@ -101,7 +146,6 @@ def get_exchange_rates(base: str, targets: List[str]) -> Dict[str, float]:
         rates[target] = fetch_exchange_rate(target, base)
     return rates
 
-import pandas as pd
 from datetime import timedelta
 
 @cached(cache=price_cache, lock=price_cache_lock)
@@ -238,31 +282,20 @@ def download_historical_prices(symbols: List[str], period: str = "1y") -> pd.Dat
     try:
         df_list = []
         # yf.download can download multiple symbols at once
-        data = yf.download(symbols, period=period, interval="1d", group_by="ticker", progress=False)
-        
-        # If there's only one symbol, yfinance doesn't use MultiIndex for columns
-        if len(symbols) == 1:
-            sym = symbols[0]
-            if "Close" in data.columns:
-                df = data[["Close"]].rename(columns={"Close": sym})
-                if df.index.tz is not None:
-                    df.index = df.index.tz_localize(None)
-                df.index = df.index.normalize() # Ensure index is just date without time
-                return df
-            return pd.DataFrame()
-            
-        # For multiple symbols, it returns a MultiIndex column DataFrame (Ticker, PriceType)
+        data = yf.download(
+            symbols,
+            period=period,
+            interval="1d",
+            group_by="ticker",
+            progress=False,
+            threads=True,
+            timeout=YFINANCE_TIMEOUT_SECONDS,
+        )
+
         for sym in symbols:
-            # yfinance recent versions behavior with MultiIndex:
-            if sym in data.columns.levels[0] or (isinstance(data.columns, pd.MultiIndex) and sym in [c[0] for c in data.columns]):
-                 try:
-                     sym_close = data[sym]["Close"]
-                     sym_df = sym_close.to_frame(name=sym)
-                     df_list.append(sym_df)
-                 except KeyError:
-                     continue
-            elif "Close" in data.columns: # Sometimes yf flattens if 1 symbol fails
-                 pass
+            sym_close = _extract_close_series(data, sym)
+            if not sym_close.empty:
+                df_list.append(sym_close.to_frame(name=sym))
                  
         if not df_list:
             return pd.DataFrame()
@@ -279,5 +312,5 @@ def download_historical_prices(symbols: List[str], period: str = "1y") -> pd.Dat
             
         return final_df
     except Exception as e:
-        logger.error(f"Failed to download historical prices for {symbols}: {e}")
+        logger.exception("Failed to download historical prices for %s: %s", symbols, e)
         return pd.DataFrame()

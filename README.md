@@ -146,19 +146,26 @@ finance-board/
    nano .env
    cd ..
    ```
+   后台行情任务需要写入受 RLS 保护的快照表，因此请配置服务端专用的
+   `SUPABASE_SERVICE_KEY`，不要把该密钥放进 frontend 或浏览器。
 
-2. **一键构建与启动：**
+2. **升级数据库结构：**
+   在 Supabase SQL Editor 执行 `backend/scripts/init_db.sql`。其中第 6、7 节会
+   创建 `market_asset_snapshots` 和 `market_fx_snapshots`，并只授权
+   `service_role` 访问。
+
+3. **一键构建与启动：**
    在项目根目录下运行以下命令：
    ```bash
    docker-compose up -d --build
    ```
    该命令会在后台自动构建 `frontend` 和 `backend` 镜像并启动容器。
 
-3. **访问服务：**
+4. **访问服务：**
    * **前端控制台:** 浏览器访问 `http://localhost:8501` (若部署在云端则替换为服务器 IP)
    * **后端 API 文档:** 浏览器访问 `http://localhost:8000/docs`
 
-4. **常用管理命令：**
+5. **常用管理命令：**
    * 查看运行日志：`docker-compose logs -f`
    * 停止并移除容器：`docker-compose down`
 
@@ -207,6 +214,27 @@ finance-board/
 7. 合并仓库。(✅已解决：使用 git-filter-repo 重写并合并了 frontend 和 backend 的 git 及其历史记录为单一的根仓库)
 8. 分别封装到docker容器（写入dockerfile和docker yml）。 *(✅已完成：为 frontend 和 backend 分别编写了 Dockerfile，并在根目录创建了 docker-compose.yml 统一编排部署。)*
 9. 也可以封装到openclaw。（目前我的开发环境是mac arm orbstack）。
+
+---
+
+## 9. 行情快照架构
+
+首页请求不再现场等待 Yahoo Finance 或 AkShare：
+
+1. APScheduler 每 5 分钟在后台刷新最新价与汇率，每小时刷新历史序列。
+2. 成功数据写入 Supabase 快照表；刷新失败时保留最后一次成功价格，并记录错误。
+3. `/api/positions`、`/api/market/exchange-rates` 和
+   `/api/portfolio/history` 只读取快照，不调用外部行情服务。
+4. 前端显示 `ok`、`stale`、`error`、`unavailable`，缺价资产不会被当成 0。
+5. `GET /api/market/status` 可以查看每个资产的数据源、更新时间和采集错误。
+
+首次启动时最新价任务约 2 秒后开始，历史任务约 15 秒后开始。如果 Yahoo 的
+代理路由仍不可用，页面会保持可用并明确显示 Yahoo 错误，但不会产生新的行情值。
+
+> **现有数据库安全提醒：** 当前既有的 accounts、assets、transactions、
+> alert_rules、custom_asset_prices 表尚未启用 RLS。启用登录和用户归属策略前，
+> 不要直接执行“仅开启 RLS、不添加策略”的操作，否则现有后端会失去访问权限；
+> 但继续保持现状也会让 anon key 具备过宽的数据访问能力，应单独安排认证改造。
 
 ### 后续有时间再说的计划
 1. 检查卖出份额不超过持仓份额？也许可以用负份额表示负债？

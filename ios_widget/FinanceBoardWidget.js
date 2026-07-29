@@ -34,13 +34,19 @@ function calculateMetrics(positions) {
   let totalValue = 0
   let totalCost = 0
   let unrealizedPnL = 0
+  let unavailableCount = 0
 
   // TODO [Future Expansion Interface]: Add daily_pnl calculation here when the backend provides it.
   // The API could either return `daily_pnl` directly per position, or provide yesterday's closing price.
   // let dailyPnL = 0 
 
   for (const pos of positions) {
-    if (pos.current_value) totalValue += pos.current_value
+    const hasValuation = pos.current_value !== null && pos.current_value !== undefined
+    if (!hasValuation) {
+      unavailableCount += 1
+      continue
+    }
+    totalValue += pos.current_value
     if (pos.unrealized_pnl) unrealizedPnL += pos.unrealized_pnl
     if (pos.total_quantity > 0 && pos.average_cost > 0) {
       totalCost += (pos.total_quantity * pos.average_cost)
@@ -58,6 +64,7 @@ function calculateMetrics(positions) {
     totalValue,
     unrealizedPnL,
     pnlPercent,
+    unavailableCount,
     // dailyPnL // reserved for future
   }
 }
@@ -105,6 +112,13 @@ async function createWidget(data) {
   }
 
   const metrics = calculateMetrics(data)
+
+  if (metrics.unavailableCount > 0) {
+    const warningText = widget.addText(`${metrics.unavailableCount} position(s) missing market data`)
+    warningText.textColor = redC
+    warningText.font = Font.systemFont(10)
+    widget.addSpacer(4)
+  }
 
   // Total Value Label
   const valueLabel = widget.addText("Total Value")
