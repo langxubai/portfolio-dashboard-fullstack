@@ -1,5 +1,5 @@
 import os
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
 from dotenv import load_dotenv
 
 # 加载 .env 文件中的环境变量
@@ -16,7 +16,8 @@ def get_supabase_client() -> Client:
     """初始化并返回 Supabase 客户端实例"""
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise ValueError("无法初始化 Supabase 客户端：环境变量 SUPABASE_URL 或 SUPABASE_KEY 缺失。请检查 .env 文件。")
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    return create_client(SUPABASE_URL, SUPABASE_KEY,
+                         options=ClientOptions(postgrest_client_timeout=15))
 
 # 全局的 client 实例（如果有需要，也可以每次请求依赖注入）
 supabase = None

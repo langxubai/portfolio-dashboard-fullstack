@@ -33,5 +33,9 @@ class PositionResponse(BaseModel):
     price_status: str = "unavailable"
     price_source: Optional[str] = None
     price_as_of: Optional[datetime] = None
+    price_market_time: Optional[str] = None
+    price_fetched_at: Optional[datetime] = None
+    price_kind: Optional[str] = None
+    price_fallback_reason: Optional[str] = None
     price_is_stale: bool = False
     price_error: Optional[str] = None

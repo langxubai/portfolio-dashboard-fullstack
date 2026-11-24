@@ -3,7 +3,8 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from src.services.alert_engine import evaluate_all_rules
-from src.services.market_collector import refresh_market_history, refresh_market_quotes
+from src.services.market_collector import refresh_market_history
+from src.services.market_refresh import request_market_refresh
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ def setup_scheduler():
         replace_existing=True,
     )
     scheduler.add_job(
-        refresh_market_quotes,
+        request_market_refresh,
         trigger=IntervalTrigger(minutes=5),
         id="refresh_market_quotes_job",
         name="Refresh persisted market quotes every 5 minutes",

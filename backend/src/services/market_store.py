@@ -69,11 +69,16 @@ def load_asset_snapshots(
         return {}, error
 
 
-def load_all_asset_snapshots() -> Tuple[Dict[str, Dict[str, Any]], Optional[str]]:
+def load_all_asset_snapshots(include_history=True) -> Tuple[Dict[str, Dict[str, Any]], Optional[str]]:
     if supabase is None:
         return {}, "Supabase client 未初始化。"
     try:
-        response = supabase.table(ASSET_SNAPSHOT_TABLE).select("*").execute()
+        columns = "*" if include_history else (
+            "asset_id,symbol,source,current_price,previous_close,quote_status,quote_error,"
+            "quote_attempted_at,quote_fetched_at,quote_as_of,quote_kind,quote_fallback_reason,"
+            "history_status,history_error,history_fetched_at,history_source"
+        )
+        response = supabase.table(ASSET_SNAPSHOT_TABLE).select(columns).execute()
         rows = _response_data(response)
         return {str(row["asset_id"]): row for row in rows}, None
     except Exception as exc:
@@ -99,6 +104,22 @@ def upsert_asset_snapshots(rows: List[Dict[str, Any]]) -> Optional[str]:
         error = _friendly_store_error(exc)
         logger.error("Failed to upsert asset market snapshots: %s", error)
         return error
+
+
+def patch_asset_snapshot(asset, changes):
+    """Insert once, then update only the fields owned by this collector."""
+    if supabase is None:
+        return "Supabase client 未初始化。"
+    try:
+        supabase.table(ASSET_SNAPSHOT_TABLE).upsert({
+            "asset_id": str(asset["id"]), "symbol": asset["symbol"],
+            "source": "pending",
+        }, on_conflict="asset_id", ignore_duplicates=True).execute()
+        supabase.table(ASSET_SNAPSHOT_TABLE).update(changes).eq("asset_id", str(asset["id"])).execute()
+        return None
+    except Exception as exc:
+        logger.exception("Snapshot update failed")
+        return _friendly_store_error(exc)
 
 
 def fx_pair_key(target: str, base: str) -> str:

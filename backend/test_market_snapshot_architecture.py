@@ -134,7 +134,7 @@ class CollectorIsolationTests(unittest.TestCase):
             "src.services.market_collector.load_all_asset_snapshots",
             return_value=({}, "snapshot table missing"),
         ), patch(
-            "src.services.market_collector.fetch_yfinance_quotes",
+            "src.services.market_collector.call_provider",
         ) as provider:
             refresh_market_quotes()
 

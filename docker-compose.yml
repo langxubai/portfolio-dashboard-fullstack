@@ -4,6 +4,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: finance-board-backend
+    # Resolve the Mac helper locally even when a VPN overrides .internal DNS.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
     env_file:

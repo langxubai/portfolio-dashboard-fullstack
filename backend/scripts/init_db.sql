@@ -123,3 +123,11 @@ REVOKE ALL ON TABLE market_fx_snapshots FROM anon, authenticated;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE market_asset_snapshots TO service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE market_fx_snapshots TO service_role;
+
+-- 8. Provider timestamps and independent quote/history provenance.
+ALTER TABLE market_asset_snapshots ADD COLUMN IF NOT EXISTS quote_as_of TEXT;
+ALTER TABLE market_asset_snapshots ADD COLUMN IF NOT EXISTS quote_kind TEXT;
+ALTER TABLE market_asset_snapshots ADD COLUMN IF NOT EXISTS quote_fallback_reason TEXT;
+ALTER TABLE market_asset_snapshots ADD COLUMN IF NOT EXISTS history_source TEXT;
+ALTER TABLE market_fx_snapshots ADD COLUMN IF NOT EXISTS as_of TEXT;
+ALTER TABLE market_fx_snapshots ADD COLUMN IF NOT EXISTS kind TEXT;

@@ -140,6 +140,9 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
         price_status = "unavailable"
         price_source = None
         price_as_of = None
+        price_market_time = None
+        price_kind = None
+        price_fallback_reason = None
         price_is_stale = False
         price_error = None
 
@@ -153,6 +156,8 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
                 price_status = "ok"
                 price_source = "manual"
                 price_as_of = custom_row.get("recorded_at")
+                price_market_time = str(price_as_of) if price_as_of else None
+                price_kind = "manual"
             else:
                 price_error = "尚未录入自定义资产价格。"
         else:
@@ -162,6 +167,9 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
                 prev_close = snapshot.get("previous_close")
                 price_source = snapshot.get("source")
                 price_as_of = snapshot.get("quote_fetched_at")
+                price_market_time = snapshot.get("quote_as_of")
+                price_kind = snapshot.get("quote_kind")
+                price_fallback_reason = snapshot.get("quote_fallback_reason")
                 price_error = snapshot.get("quote_error")
                 quote_status = snapshot.get("quote_status", "unavailable")
                 if price is not None:
@@ -179,6 +187,14 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
                             price_is_stale = True
                     else:
                         price_is_stale = True
+                    if price_market_time:
+                        try:
+                            market_day = datetime.fromisoformat(price_market_time.replace("Z", "+00:00")).date()
+                            # Keep weekends/holidays distinct from an old successful fetch.
+                            if (datetime.now(timezone.utc).date() - market_day).days > 5:
+                                price_is_stale = True
+                        except ValueError:
+                            price_is_stale = True
                     if quote_status != "ok" or price_is_stale:
                         price_status = "stale"
                 else:
@@ -201,6 +217,10 @@ def calculate_positions(account_id: str = None) -> List[PositionResponse]:
             "price_status": price_status,
             "price_source": price_source,
             "price_as_of": price_as_of,
+            "price_market_time": price_market_time,
+            "price_fetched_at": price_as_of,
+            "price_kind": price_kind,
+            "price_fallback_reason": price_fallback_reason,
             "price_is_stale": price_is_stale,
             "price_error": price_error,
         }

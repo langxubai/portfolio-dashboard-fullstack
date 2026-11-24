@@ -72,6 +72,7 @@ def fetch_yfinance_quotes(
             progress=False,
             threads=True,
             timeout=YFINANCE_TIMEOUT_SECONDS,
+            auto_adjust=False,
         )
         prices: Dict[str, Dict[str, float]] = {}
         for symbol in unique_symbols:
@@ -85,6 +86,9 @@ def fetch_yfinance_quotes(
             prices[symbol] = {
                 "current_price": current_price,
                 "previous_close": previous_close,
+                "as_of": pd.Timestamp(closes.index[-1]).date().isoformat(),
+                "kind": "daily_close",
+                "source": "yfinance",
             }
         if not prices:
             return {}, "Yahoo Finance 未返回任何可用价格。"
@@ -204,7 +208,9 @@ def fetch_fund_cn_price(symbol: str) -> Optional[Dict[str, float]]:
         # Expected columns: 净值日期, 单位净值, 日增长率
         df = df.sort_values(by=df.columns[0])  # sort by date ascending
         current_price = float(df.iloc[-1, 1])   # last row, nav column
-        result: Dict[str, float] = {"current_price": current_price}
+        result = {"current_price": current_price,
+                  "as_of": pd.Timestamp(df.iloc[-1, 0]).date().isoformat(),
+                  "kind": "nav", "source": "akshare"}
         if len(df) >= 2:
             result["previous_close"] = float(df.iloc[-2, 1])
         with price_cache_lock:

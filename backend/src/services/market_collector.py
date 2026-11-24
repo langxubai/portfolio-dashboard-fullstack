@@ -1,322 +1,193 @@
-"""Background market-data collector.
+"""Independent, bounded collectors. Successful groups publish immediately."""
 
-Slow and unreliable provider calls live here, outside every FastAPI request
-path. Successful values are persisted as last-known-good snapshots; a failed
-attempt updates status/error fields without erasing the usable old value.
-"""
-
-from __future__ import annotations
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import logging
-from typing import Any, Dict, Iterable, List
-
-import pandas as pd
+import math
+import threading
 
 from src.database import supabase
-from src.services.market_data import (
-    download_fund_cn_historical_prices,
-    download_historical_prices,
-    fetch_fund_cn_price,
-    fetch_yfinance_quotes,
-)
+from src.services.market_process import call_provider
 from src.services.market_store import (
-    SUPPORTED_CURRENCIES,
-    fx_pair_key,
-    load_all_asset_snapshots,
-    load_all_fx_snapshots,
-    upsert_asset_snapshots,
-    upsert_fx_snapshots,
-    utc_now_iso,
+    SUPPORTED_CURRENCIES, load_all_asset_snapshots, patch_asset_snapshot,
+    upsert_fx_snapshots, utc_now_iso,
 )
-
 
 logger = logging.getLogger(__name__)
+_quote_lock = threading.Lock()
+_history_lock = threading.Lock()
 
 
-def _response_data(response: Any) -> List[Dict[str, Any]]:
-    data = getattr(response, "data", None)
-    return data if isinstance(data, list) else []
-
-
-def _load_assets() -> List[Dict[str, Any]]:
+def _load_assets():
     if supabase is None:
-        raise RuntimeError("Supabase client 未初始化。")
-    response = (
-        supabase.table("assets")
-        .select("id,symbol,name,asset_type,currency")
-        .execute()
-    )
-    return _response_data(response)
+        raise RuntimeError("Supabase client 未初始化")
+    response = supabase.table("assets").select("id,symbol,asset_type,currency").execute()
+    return [a for a in response.data if a["asset_type"] != "Custom" and a.get("symbol")]
 
 
-def _provider_for(asset: Dict[str, Any]) -> str:
-    if asset.get("asset_type") == "FundCN":
-        return "akshare"
-    return "yfinance"
+def _timestamp(value):
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
 
 
-def _base_asset_row(
-    asset: Dict[str, Any],
-    existing: Dict[str, Dict[str, Any]],
-) -> Dict[str, Any]:
-    asset_id = str(asset["id"])
-    row = dict(existing.get(asset_id, {}))
-    row.update(
-        {
-            "asset_id": asset_id,
-            "symbol": asset["symbol"],
-            "source": _provider_for(asset),
-            "updated_at": utc_now_iso(),
-        }
-    )
-    row.setdefault("history", {})
-    row.setdefault("quote_status", "pending")
-    row.setdefault("history_status", "pending")
-    return row
-
-
-def _history_map(series: pd.Series) -> Dict[str, float]:
-    result: Dict[str, float] = {}
-    clean_series = pd.to_numeric(series, errors="coerce").dropna()
-    for index, value in clean_series.items():
-        timestamp = pd.Timestamp(index)
-        if timestamp.tzinfo is not None:
-            timestamp = timestamp.tz_localize(None)
-        result[timestamp.strftime("%Y-%m-%d")] = float(value)
-    return result
-
-
-def refresh_market_quotes() -> None:
-    """Refresh latest asset and FX quotes.
-
-    APScheduler executes this synchronous function in its worker executor, so
-    provider stalls cannot block FastAPI's asyncio event loop.
-    """
-    started_at = datetime.now(timezone.utc)
-    logger.info("Market quote refresh started")
-    try:
-        assets = [
-            asset
-            for asset in _load_assets()
-            if asset.get("asset_type") != "Custom" and asset.get("symbol")
-        ]
-    except Exception:
-        logger.exception("Unable to load assets for market quote refresh")
-        return
-
-    existing, store_error = load_all_asset_snapshots()
-    if store_error:
-        logger.error("Market quote refresh skipped: %s", store_error)
-        return
+def _save_quote(asset, quote, error, existing, fallback_reason=None):
     now = utc_now_iso()
-    rows: List[Dict[str, Any]] = []
+    changes = {"quote_attempted_at": now, "quote_status": "error",
+               "quote_error": error or "所有适用数据源均未返回有效报价", "updated_at": now}
+    if quote:
+        try:
+            price = float(quote["current_price"])
+            at = _timestamp(quote["as_of"])
+            old_at = existing.get(str(asset["id"]), {}).get("quote_as_of")
+            if not math.isfinite(price) or price <= 0:
+                raise ValueError("无效价格")
+            if old_at and at < _timestamp(old_at):
+                raise ValueError("数据源行情时间早于已保存行情，保留已有价格")
+            previous = quote.get("previous_close")
+            if previous is not None and (not math.isfinite(float(previous)) or float(previous) <= 0):
+                previous = None
+            changes.update({
+                "current_price": price, "previous_close": previous,
+                "source": quote["source"], "quote_as_of": quote["as_of"],
+                "quote_kind": quote["kind"], "quote_fetched_at": now,
+                "quote_fallback_reason": fallback_reason,
+                "quote_status": "ok", "quote_error": None,
+            })
+        except (ValueError, TypeError, KeyError) as exc:
+            changes["quote_error"] = str(exc)
+    store_error = patch_asset_snapshot(asset, changes)
+    return {"symbol": asset["symbol"], "ok": not store_error and changes["quote_status"] == "ok",
+            "source": changes.get("source"), "error": store_error or changes["quote_error"]}
 
-    yahoo_assets = [
-        asset for asset in assets if _provider_for(asset) == "yfinance"
-    ]
-    yahoo_symbols = [str(asset["symbol"]) for asset in yahoo_assets]
-    yahoo_prices, yahoo_error = fetch_yfinance_quotes(yahoo_symbols)
 
-    for asset in yahoo_assets:
-        row = _base_asset_row(asset, existing)
-        symbol = str(asset["symbol"])
-        price_data = yahoo_prices.get(symbol)
-        row["quote_attempted_at"] = now
-        if price_data:
-            row.update(
-                {
-                    "current_price": price_data["current_price"],
-                    "previous_close": price_data["previous_close"],
-                    "quote_status": "ok",
-                    "quote_error": None,
-                    "quote_fetched_at": now,
-                }
-            )
-        else:
-            row.update(
-                {
-                    "quote_status": "error",
-                    "quote_error": yahoo_error
-                    or f"Yahoo Finance 未返回 {symbol} 的价格。",
-                }
-            )
-        rows.append(row)
-
+def _quote_group(assets, primary, existing):
+    payload = assets[0] if primary == "coinbase" else assets
+    quotes, error = call_provider(primary, payload, timeout=10)
+    results = []
+    missing = []
     for asset in assets:
-        if _provider_for(asset) != "akshare":
-            continue
-        row = _base_asset_row(asset, existing)
-        symbol = str(asset["symbol"])
-        row["quote_attempted_at"] = now
-        price_data = fetch_fund_cn_price(symbol)
-        if price_data:
-            row.update(
-                {
-                    "current_price": price_data["current_price"],
-                    "previous_close": price_data.get("previous_close"),
-                    "quote_status": "ok",
-                    "quote_error": None,
-                    "quote_fetched_at": now,
-                }
-            )
+        quote = quotes.get(asset["symbol"])
+        if quote:
+            results.append(_save_quote(asset, quote, None, existing))
         else:
-            row.update(
-                {
-                    "quote_status": "error",
-                    "quote_error": f"AkShare 未返回 {symbol} 的净值，详见后端日志。",
-                }
-            )
-        rows.append(row)
-
-    store_error = upsert_asset_snapshots(rows)
-    if store_error:
-        logger.error("Asset quote refresh could not be persisted: %s", store_error)
-
-    _refresh_fx_quotes(now)
-    elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
-    logger.info("Market quote refresh finished in %.2fs", elapsed)
+            missing.append(asset)
+    if missing:
+        fallback, fallback_error = call_provider("yahoo", [a["symbol"] for a in missing], timeout=15)
+        for asset in missing:
+            reason = error or f"{primary} 未覆盖或未返回该标的"
+            results.append(_save_quote(asset, fallback.get(asset["symbol"]),
+                                       fallback_error or reason, existing, reason))
+    return results
 
 
-def _refresh_fx_quotes(now: str) -> None:
-    existing, store_error = load_all_fx_snapshots()
-    if store_error:
-        logger.error("FX quote refresh skipped: %s", store_error)
-        return
-    ticker_to_pair: Dict[str, tuple[str, str]] = {}
-    for target in SUPPORTED_CURRENCIES:
-        for base in SUPPORTED_CURRENCIES:
-            if target == base:
-                continue
-            ticker_to_pair[f"{target}{base}=X"] = (target, base)
-
-    prices, batch_error = fetch_yfinance_quotes(list(ticker_to_pair))
-    rows: List[Dict[str, Any]] = []
-    for ticker, (target, base) in ticker_to_pair.items():
-        pair = fx_pair_key(target, base)
-        row = dict(existing.get(pair, {}))
-        row.update(
-            {
-                "pair": pair,
-                "target_currency": target,
-                "base_currency": base,
-                "source": "yfinance",
-                "attempted_at": now,
-                "updated_at": now,
-            }
-        )
-        price_data = prices.get(ticker)
-        if price_data:
-            row.update(
-                {
-                    "rate": price_data["current_price"],
-                    "status": "ok",
-                    "error": None,
-                    "fetched_at": now,
-                }
-            )
-        else:
-            row.update(
-                {
-                    "status": "error",
-                    "error": batch_error
-                    or f"Yahoo Finance 未返回汇率代码 {ticker}。",
-                }
-            )
-        rows.append(row)
-
-    store_error = upsert_fx_snapshots(rows)
-    if store_error:
-        logger.error("FX quote refresh could not be persisted: %s", store_error)
+def _fund_quote(asset, existing):
+    quotes, error = call_provider("fund", asset["symbol"], timeout=20)
+    return [_save_quote(asset, quotes.get(asset["symbol"]), error, existing)]
 
 
-def refresh_market_history(period: str = "max") -> None:
-    """Refresh daily price history without blocking any user request."""
-    started_at = datetime.now(timezone.utc)
-    logger.info("Market history refresh started")
-    try:
-        assets = [
-            asset
-            for asset in _load_assets()
-            if asset.get("asset_type") != "Custom" and asset.get("symbol")
-        ]
-    except Exception:
-        logger.exception("Unable to load assets for market history refresh")
-        return
-
-    existing, store_error = load_all_asset_snapshots()
-    if store_error:
-        logger.error("Market history refresh skipped: %s", store_error)
-        return
+def _fx_quotes():
+    quotes, error = call_provider("frankfurter", list(SUPPORTED_CURRENCIES), timeout=10)
+    pairs = [f"{target}/{base}" for target in SUPPORTED_CURRENCIES
+             for base in SUPPORTED_CURRENCIES if target != base]
+    missing = [pair for pair in pairs if pair not in quotes]
+    if missing:
+        fallback, fallback_error = call_provider("yahoo", [p.replace("/", "") + "=X" for p in missing], timeout=15)
+        for pair in missing:
+            quote = fallback.get(pair.replace("/", "") + "=X")
+            if quote:
+                quotes[pair] = quote
+        error = fallback_error or error
     now = utc_now_iso()
-    rows_by_id: Dict[str, Dict[str, Any]] = {
-        str(asset["id"]): _base_asset_row(asset, existing) for asset in assets
-    }
-
-    yahoo_assets = [
-        asset for asset in assets if _provider_for(asset) == "yfinance"
-    ]
-    yahoo_symbols = [str(asset["symbol"]) for asset in yahoo_assets]
-    yahoo_df = download_historical_prices(yahoo_symbols, period=period)
-
-    for asset in yahoo_assets:
-        asset_id = str(asset["id"])
-        symbol = str(asset["symbol"])
-        row = rows_by_id[asset_id]
-        row["history_attempted_at"] = now
-        if symbol in yahoo_df.columns:
-            history = _history_map(yahoo_df[symbol])
+    successes, failures = [], []
+    for pair in pairs:
+        target, base = pair.split("/")
+        row = {"pair": pair, "target_currency": target, "base_currency": base,
+               "attempted_at": now, "updated_at": now}
+        quote = quotes.get(pair)
+        if quote and math.isfinite(float(quote["current_price"])) and float(quote["current_price"]) > 0:
+            row.update({"rate": quote["current_price"], "source": quote["source"],
+                        "as_of": quote["as_of"], "kind": quote["kind"],
+                        "status": "ok", "error": None, "fetched_at": now})
+            successes.append(row)
         else:
-            history = {}
-        if history:
-            row.update(
-                {
-                    "history": history,
-                    "history_status": "ok",
-                    "history_error": None,
-                    "history_fetched_at": now,
-                }
-            )
-        else:
-            row.update(
-                {
-                    "history_status": "error",
-                    "history_error": f"Yahoo Finance 未返回 {symbol} 的历史行情。",
-                }
-            )
+            failures.append(pair)
+    store_error = upsert_fx_snapshots(successes)
+    # Failure updates preserve the last successful rate and its provenance.
+    if failures and supabase is not None:
+        try:
+            supabase.table("market_fx_snapshots").update({
+                "status": "error", "error": error or "汇率源无数据", "attempted_at": now,
+            }).in_("pair", failures).execute()
+        except Exception:
+            store_error = "汇率状态保存失败"
+    return [{"symbol": "汇率", "ok": not failures and not store_error,
+             "source": "frankfurter", "error": store_error or (error if failures else None)}]
 
+
+def refresh_market_quotes():
+    if not _quote_lock.acquire(blocking=False):
+        return [{"symbol": "价格", "ok": False, "error": "已有价格更新正在运行"}]
+    try:
+        assets = _load_assets()
+        existing, error = load_all_asset_snapshots(include_history=False)
+        if error:
+            return [{"symbol": "数据库", "ok": False, "error": error}]
+        results = []
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            stocks = [a for a in assets if a["asset_type"] not in {"FundCN", "Crypto"}]
+            futures = [pool.submit(_fx_quotes)]
+            if stocks:
+                futures.append(pool.submit(_quote_group, stocks, "tencent", existing))
+            for asset in assets:
+                if asset["asset_type"] == "FundCN":
+                    futures.append(pool.submit(_fund_quote, asset, existing))
+                elif asset["asset_type"] == "Crypto":
+                    futures.append(pool.submit(_quote_group, [asset], "coinbase", existing))
+            for future in as_completed(futures):
+                try:
+                    results.extend(future.result())
+                except Exception as exc:
+                    logger.exception("Quote group failed")
+                    results.append({"symbol": "采集任务", "ok": False, "error": type(exc).__name__})
+        return results
+    finally:
+        _quote_lock.release()
+
+
+def _history_group(assets, provider, period):
+    histories, error = call_provider(provider, {"symbols": [a["symbol"] for a in assets], "period": period}, timeout=30)
+    results = []
     for asset in assets:
-        if _provider_for(asset) != "akshare":
-            continue
-        asset_id = str(asset["id"])
-        symbol = str(asset["symbol"])
-        row = rows_by_id[asset_id]
-        row["history_attempted_at"] = now
-        fund_df = download_fund_cn_historical_prices([symbol], period=period)
-        history = (
-            _history_map(fund_df[symbol])
-            if symbol in fund_df.columns
-            else {}
-        )
+        now = utc_now_iso()
+        history = histories.get(asset["symbol"])
+        changes = {"history_attempted_at": now, "history_status": "error",
+                   "history_error": error or "历史行情源未返回数据"}
         if history:
-            row.update(
-                {
-                    "history": history,
-                    "history_status": "ok",
-                    "history_error": None,
-                    "history_fetched_at": now,
-                }
-            )
-        else:
-            row.update(
-                {
-                    "history_status": "error",
-                    "history_error": f"AkShare 未返回 {symbol} 的历史净值。",
-                }
-            )
+            changes.update({"history": history, "history_status": "ok", "history_error": None,
+                            "history_source": provider, "history_fetched_at": now})
+        store_error = patch_asset_snapshot(asset, changes)
+        results.append({"symbol": asset["symbol"], "ok": bool(history) and not store_error,
+                        "error": store_error or changes["history_error"]})
+    return results
 
-    store_error = upsert_asset_snapshots(list(rows_by_id.values()))
-    if store_error:
-        logger.error("History refresh could not be persisted: %s", store_error)
-    elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
-    logger.info("Market history refresh finished in %.2fs", elapsed)
+
+def refresh_market_history(period="max"):
+    if not _history_lock.acquire(blocking=False):
+        return [{"symbol": "历史曲线", "ok": False, "error": "历史曲线更新已在运行"}]
+    try:
+        assets = _load_assets()
+        results = []
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            yahoo = [a for a in assets if a["asset_type"] != "FundCN"]
+            futures = [pool.submit(_history_group, yahoo, "yahoo_history", period)] if yahoo else []
+            futures.extend(pool.submit(_history_group, [a], "fund_history", period)
+                           for a in assets if a["asset_type"] == "FundCN")
+            for future in as_completed(futures):
+                try:
+                    results.extend(future.result())
+                except Exception as exc:
+                    logger.exception("History group failed")
+                    results.append({"symbol": "历史曲线", "ok": False, "error": type(exc).__name__})
+        return results
+    finally:
+        _history_lock.release()

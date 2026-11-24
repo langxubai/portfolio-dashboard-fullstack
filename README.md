@@ -1,6 +1,20 @@
 # 个人全栈金融资产看板 (Personal Finance Dashboard)
 
-详细技术路径参考 ./frontend/README.md 和 ./backend/README.md 文件。
+前后端的技术说明见 [前端 README](./frontend/README.md) 和 [后端 README](./backend/README.md)。
+
+### 在看板里问 AI 关于持仓的问题
+
+侧栏的 **问我的持仓** 支持连续提问。例如，可以先问「前三大仓位合计占多少？」，再问「哪些资产缺少报价，这对刚才的结论有什么影响？」。你可以使用 Mac 上已登录的 Codex，也可以选择自行配置的兼容 Chat Completions 接口。每次发送时，后端从看板数据生成一份持仓摘要；发送前可以在页面了解数据范围。
+
+在**现有 Docker 版已经能显示持仓**的 Mac 上，启用 Codex 的步骤如下。请在项目根目录执行。
+
+```bash
+python3 scripts/setup_ai.py --install-agent
+docker compose up -d --build
+python3 scripts/setup_ai.py --show-chat-token | pbcopy
+```
+
+打开[本地聊天页](http://127.0.0.1:8501/问我的持仓)，粘贴上一步复制的看板口令，选择 Codex 后提问。日常使用时，也可以在 Finder 双击 [打开持仓对话.command](./macos/打开持仓对话.command)，它会复制口令并打开页面。请将口令填在专用密码框里。Mac 助手在登录时自动启动。新安装的用户请先按下方第 7 节配置数据库。API 模式、数据范围、安装变更、测试方法和排障步骤见[持仓对话实施与使用记录](./docs/portfolio-chat.md)。
 
 ## 1. 项目概述 (Project Overview)
 本项目旨在开发一个自动化、多端的个人金融资产跟踪与管理系统。系统通过中心化的后端 API 管理多账户的资产流水，实时计算持仓及盈亏，并内置**自定义规则引擎**，支持多维度的价格异动与目标价实时推送报警。
@@ -77,9 +91,9 @@
 * 桌面小组件定时调用 `/api/positions`。
 * 渲染总资产、今日盈亏绝对值与百分比，实现免打开 App 随时看盘。
 
-### C. 聊天快捷交互 (Chatbot)
-* 预留 Webhook 接收自然语言指令。
-* 支持快速记账（如："买入 AAPL 10 150"）和快速设警（如："提醒：AAPL 跌破 150"）。
+### C. 持仓对话
+
+在 Streamlit 看板中与 AI 讨论当前配置、仓位集中度和行情覆盖。对话使用只读持仓摘要。自然语言记账、设警以及外部聊天 Webhook 仍属规划中的方向。
 
 ---
 
@@ -95,6 +109,9 @@ finance-board/
 │   ├── app.py                # Dashboard 仪表盘主页
 │   ├── pages/                # 各功能子页 (账户、交易录入、规则配置)
 │   └── README.md             # 前端子项目的实施细节
+├── macos/                    # 调用当前 Mac 用户 Codex 的本地助手
+├── scripts/setup_ai.py       # 生成看板口令并配置可选的 Mac 登录助手
+├── docs/portfolio-chat.md    # 持仓对话使用、设计、测试和维护记录
 ├── ios_widget/               # iOS 桌面端免挂靠看板
 │   ├── FinanceBoardWidget.js # Scriptable 原生小组件源码
 │   └── README.md             # 如何在 iPhone / Tailscale 上配置
@@ -209,7 +226,7 @@ finance-board/
     *(✅已解决：在 `frontend/app.py` 中添加了 3 年和 10 年的图表时间字典映射，同时在 `backend/src/services/portfolio_history.py` 中通过 `pd.to_datetime` 取首笔交易时间对齐过滤，彻底截断了早于第一笔流水的长尾空载价格序列，使得数据起点正确。)*
 3. 增加修改资产名称、代码、类型和货币的功能。
 4. 增加修改账户名称和货币的功能。
-5. 历史回顾功能：回顾过去某个指定时刻的持仓情况和对应的收益情况。（基于此可以引入ai分析持仓倾向、资产配置等。也可以不基于此？但是首先需要数据清洗！！！不保留券商名称，只保留券商uuid；不保留绝对金额，仓位占比；不保留交易时间，只保留交易日期）
+5. 历史回顾功能：回顾过去某个指定时刻的持仓情况和对应的收益情况。当前持仓已经支持 [AI 对话](./docs/portfolio-chat.md)，摘要按占比描述配置。任意历史日期的持仓重建与对比仍待实现。
 6. 设计前端和后端的登录功能。目前为了实现iOS的Scriptable小组件功能，后端api暴露在外，但是这样不安全，所以需要后端增加登录功能。如果想要实现前端部署在云上（推荐域名stocks.*），前端同样也需要登录功能，要不然谁拿到网址都能看到我的资产信息。
 7. 合并仓库。(✅已解决：使用 git-filter-repo 重写并合并了 frontend 和 backend 的 git 及其历史记录为单一的根仓库)
 8. 分别封装到docker容器（写入dockerfile和docker yml）。 *(✅已完成：为 frontend 和 backend 分别编写了 Dockerfile，并在根目录创建了 docker-compose.yml 统一编排部署。)*
@@ -222,14 +239,25 @@ finance-board/
 首页请求不再现场等待 Yahoo Finance 或 AkShare：
 
 1. APScheduler 每 5 分钟在后台刷新最新价与汇率，每小时刷新历史序列。
+   「刷新最新价格」会立即发起同一采集任务，重复点击会合并到正在运行的任务。
 2. 成功数据写入 Supabase 快照表；刷新失败时保留最后一次成功价格，并记录错误。
 3. `/api/positions`、`/api/market/exchange-rates` 和
    `/api/portfolio/history` 只读取快照，不调用外部行情服务。
 4. 前端显示 `ok`、`stale`、`error`、`unavailable`，缺价资产不会被当成 0。
 5. `GET /api/market/status` 可以查看每个资产的数据源、更新时间和采集错误。
 
-首次启动时最新价任务约 2 秒后开始，历史任务约 15 秒后开始。如果 Yahoo 的
-代理路由仍不可用，页面会保持可用并明确显示 Yahoo 错误，但不会产生新的行情值。
+首次启动时最新价任务约 2 秒后开始，历史任务约 15 秒后开始。股票与 ETF
+优先使用腾讯报价，USD 加密资产优先使用 Coinbase，汇率优先使用 Frankfurter
+每日参考汇率，缺失报价再尝试 Yahoo。FundCN 使用 AkShare/东方财富净值。
+这些来源的覆盖范围与时间粒度不同，页面分别显示行情时间、采集成功时间、
+价格类型和备用源切换原因。旧记录没有行情时间时显示「未记录」。
+
+数据源运行在独立进程中，整次调用超时后结束进程（报价 10–20 秒，历史 30 秒）。
+各组独立保存成功结果；价格和历史任务只写各自的字段，避免相互覆盖。
+历史股票数据仍使用 Yahoo，失败时保留已有序列并显示状态。
+
+升级已有数据库时执行 `backend/scripts/init_db.sql` 第 8 节的幂等 `ALTER TABLE`。
+`POST /api/market/refresh` 返回后台任务状态，`GET /api/market/refresh` 查询进度和结果。
 
 > **现有数据库安全提醒：** 当前既有的 accounts、assets、transactions、
 > alert_rules、custom_asset_prices 表尚未启用 RLS。启用登录和用户归属策略前，

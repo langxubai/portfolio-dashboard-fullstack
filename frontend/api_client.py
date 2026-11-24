@@ -22,6 +22,11 @@ _TRANSPORT = httpx.HTTPTransport(
     ),
 )
 
+
+class ChatAccessError(ValueError):
+    pass
+
+
 class FinanceAPIClient:
     def __init__(self, base_url: str = BACKEND_URL):
         self.base_url = base_url.rstrip("/")
@@ -125,6 +130,48 @@ class FinanceAPIClient:
 
     def get_market_status(self) -> Dict[str, Any]:
         return self._request("GET", "/api/market/status")
+
+    def refresh_market(self) -> Dict[str, Any]:
+        return self._request("POST", "/api/market/refresh")
+
+    def get_refresh_status(self) -> Dict[str, Any]:
+        return self._request("GET", "/api/market/refresh")
+
+    def get_ai_status(self) -> Dict[str, Any]:
+        return self._request("GET", "/api/ai/status")
+
+    def ask_about_positions(self, provider: str, messages: List[Dict[str, str]], access_token: str) -> str:
+        # A lost response can still consume model quota. Only the user may retry.
+        if not access_token.isascii() or not access_token.isprintable() or " " in access_token:
+            raise ChatAccessError("口令格式不正确。请复制本机显示的聊天口令后重试。")
+        try:
+            response = self._client.post(
+                "/api/ai/chat",
+                json={"provider": provider, "messages": messages},
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=httpx.Timeout(connect=5.0, read=200.0, write=10.0, pool=5.0),
+            )
+        except httpx.TimeoutException:
+            raise ValueError("等待回答超时。模型可能已收到问题，可稍后手动重试。") from None
+        except httpx.RequestError:
+            raise ValueError("与看板后端的连接中断。请确认服务正在运行，再手动重试。") from None
+        if response.status_code in (401, 403):
+            raise ChatAccessError("聊天口令未通过验证。请重新输入口令，再重试这条问题。")
+        if response.status_code == 422:
+            raise ValueError("对话内容超出后端允许的范围。请缩短问题或清空本轮对话。")
+        if response.is_error:
+            try:
+                detail = response.json().get("detail")
+            except (ValueError, AttributeError):
+                detail = None
+            raise ValueError(detail if isinstance(detail, str) else f"看板后端返回错误（HTTP {response.status_code}）。")
+        try:
+            reply = response.json().get("reply")
+        except (ValueError, AttributeError):
+            reply = None
+        if not isinstance(reply, str) or not reply.strip():
+            raise ValueError("看板未收到有效的模型回答。可以手动重试。")
+        return reply.strip()
 
 
 api = FinanceAPIClient()
